@@ -12,6 +12,7 @@ $uploadDir = __DIR__ . '/uploads/';
 $inputFile = $uploadDir . $fileId . '.xlsx';
 $outputFile = $uploadDir . $fileId . '_out.xlsx';
 
+// Sécurité simplifiée et robuste : on vérifie que l'ID ne contient que des chiffres
 if (empty($fileId) || !preg_match('/^[0-9]+$/', $fileId)) {
     die(json_encode(['success' => false, 'message' => 'ID de fichier invalide.']));
 }
@@ -23,7 +24,7 @@ function clean_ffa_text($val) {
 // ACTION 1 : TRAITEMENT PAR SÉQUENCE (AJAX)
 if ($action === 'run') {
     $start = (int)($_GET['start'] ?? 2);
-    $chunkSize = 5; // Nombre de personnes traitées par appel (anti-timeout)
+    $chunkSize = 5; // Traitement par paquets de 5 personnes
 
     if (!file_exists($inputFile)) {
         echo json_encode(['success' => false, 'message' => 'Fichier source introuvable.']);
@@ -115,8 +116,10 @@ if ($action === 'run') {
                             preg_match('/^\d+/', $placeRaw, $placeMatch);
                             $place = isset($placeMatch[0]) ? $placeMatch[0] : $placeRaw;
 
-                            if (!empty($perf) && !empty($epreuve) && strtolower($epreuve) !== "épreuve" && strtolower($epreuve) !== "epreuve") { 
-                                // NOUVEAU FORMATTAGE STRUCTURÉ DEMANDÉ
+                            // Vérification propre sans mb_strtolower
+                            $epreuveLower = strtolower($epreuve);
+                            if (!empty($perf) && !empty($epreuve) && $epreuveLower !== "épreuve" && $epreuveLower !== "epreuve") {
+                                // Format demandé : Événement - Date \n Place : X / Temps : Y
                                 $listeCompets[] = "{$epreuve} - {$date}\nPlace : {$place} / Temps : {$perf}";
                             }
                         }
@@ -124,13 +127,13 @@ if ($action === 'run') {
                 }
                 
                 if (!empty($listeCompets)) {
-                    // On prend les 5 dernières compétitions max
+                    // On garde les 5 derniers résultats max, séparés par un double saut de ligne
                     $resultatsFormates = implode("\n\n", array_slice($listeCompets, 0, 5));
                 }
             }
         }
 
-        // Écriture à la même ligne correspondante dans l'export
+        // Écriture à la ligne correspondante
         $sheetOut->setCellValue('A' . $i, $nom);
         $sheetOut->setCellValue('B' . $i, $prenom);
         $sheetOut->setCellValue('C' . $i, $dateNaissance);
@@ -139,13 +142,12 @@ if ($action === 'run') {
         $sheetOut->getStyle('E' . $i)->getAlignment()->setWrapText(true);
     }
 
-    // Sauvegarde de l'état d'avancement
+    // Sauvegarde de l'avancement temporaire
     $writer = new Xlsx($spreadsheetOut);
     $writer->save($outputFile);
 
     $done = ($end >= $totalRows);
     
-    // Nettoyage du fichier temporaire initial si c'est fini
     if ($done && file_exists($inputFile)) {
         unlink($inputFile);
     }
@@ -154,7 +156,7 @@ if ($action === 'run') {
     exit;
 }
 
-// ACTION 2 : TÉLÉCHARGEMENT FINAL DU FICHIER RECONSTRUIT
+// ACTION 2 : TÉLÉCHARGEMENT DU FICHIER FINAL RECONSTRUIT
 if ($action === 'download') {
     if (!file_exists($outputFile)) {
         die("Erreur : Le fichier de résultats n'est pas disponible.");
@@ -163,7 +165,7 @@ if ($action === 'download') {
     $spreadsheetOut = IOFactory::load($outputFile);
     $sheetOut = $spreadsheetOut->getActiveSheet();
 
-    // Largeurs de colonnes sécurisées
+    // Largeurs de colonnes fixes
     $sheetOut->getColumnDimension('A')->setWidth(20);
     $sheetOut->getColumnDimension('B')->setWidth(20);
     $sheetOut->getColumnDimension('C')->setWidth(20);
@@ -179,7 +181,7 @@ if ($action === 'download') {
     $writer = new Xlsx($spreadsheetOut);
     $writer->save('php://output');
     
-    // Suppression du fichier du serveur après livraison
+    // Suppression du fichier du serveur après téléchargement
     unlink($outputFile);
     exit;
 }
