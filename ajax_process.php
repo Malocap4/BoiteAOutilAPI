@@ -1,5 +1,6 @@
 <?php
-set_time_limit(30);
+// On empêche le script de saturer la mémoire ou le temps système
+set_time_limit(20);
 require 'vendor/autoload.php';
 
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -12,7 +13,7 @@ $uploadDir = __DIR__ . '/uploads/';
 $inputFile = $uploadDir . $fileId . '.xlsx';
 $outputFile = $uploadDir . $fileId . '_out.xlsx';
 
-// Sécurité simplifiée et robuste : on vérifie que l'ID ne contient que des chiffres
+// Vérification de sécurité de l'identifiant (uniquement des chiffres)
 if (empty($fileId) || !preg_match('/^[0-9]+$/', $fileId)) {
     die(json_encode(['success' => false, 'message' => 'ID de fichier invalide.']));
 }
@@ -21,22 +22,33 @@ function clean_ffa_text($val) {
     return trim(html_entity_decode(strip_tags($val)));
 }
 
-// ACTION 1 : TRAITEMENT PAR SÉQUENCE (AJAX)
+// ACTION 1 : TRAITEMENT PAR SÉQUENCE RAPIDE (AJAX)
 if ($action === 'run') {
     $start = (int)($_GET['start'] ?? 2);
-    $chunkSize = 5; // Traitement par paquets de 5 personnes
+    $chunkSize = 2; // TRÈS IMPORTANT : On traite par paquets de 2 pour éviter le gel sur Render
 
-    if (!file_exists($inputFile)) {
-        echo json_encode(['success' => false, 'message' => 'Fichier source introuvable.']);
+    // Si le fichier temporaire initial n'existe plus mais que le fichier de sortie est là, c'est qu'on a déjà fini
+    if (!file_exists($inputFile) && file_exists($outputFile) && $start > 2) {
+        echo json_encode(['success' => true, 'next' => $start, 'done' => true]);
         exit;
     }
 
-    $spreadsheetIn = IOFactory::load($inputFile);
-    $sheetIn = $spreadsheetIn->getActiveSheet();
-    $rows = $sheetIn->toArray(null, true, true, true);
-    $totalRows = count($rows);
+    if (!file_exists($inputFile)) {
+        echo json_encode(['success' => false, 'message' => 'Fichier source introuvable. Veuillez réessayer l\'import.']);
+        exit;
+    }
 
-    // Initialisation ou chargement du fichier de sortie
+    try {
+        $spreadsheetIn = IOFactory::load($inputFile);
+        $sheetIn = $spreadsheetIn->getActiveSheet();
+        $rows = $sheetIn->toArray(null, true, true, true);
+        $totalRows = count($rows);
+    } catch (\Exception $e) {
+        echo json_encode(['success' => false, 'message' => 'Erreur de lecture : ' . $e->getMessage()]);
+        exit;
+    }
+
+    // Chargement ou création de l'export final
     if (file_exists($outputFile)) {
         $spreadsheetOut = IOFactory::load($outputFile);
         $sheetOut = $spreadsheetOut->getActiveSheet();
@@ -70,13 +82,14 @@ if ($action === 'run') {
         $idFFA = "";
         $resultatsFormates = "";
 
-        // Scraping Étape A : Recherche ID
+        // --- ÉTAPE A : Recherche de l'ID avec un Timeout ultra-strict (2 secondes) ---
         $urlRecherche = "https://www.athle.fr/bases/liste.aspx?frmbase=resultats&frmmode=1&frmnom=" . urlencode(strtoupper($nom)) . "&frmprenom=" . urlencode($prenom);
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $urlRecherche);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        curl_setopt($ch, CURLOPT_TIMEOUT, 4);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 2); 
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
         $htmlRecherche = curl_exec($ch);
         curl_close($ch);
 
@@ -86,14 +99,15 @@ if ($action === 'run') {
             $idFFA = $matches[1];
         }
 
-        // Scraping Étape B : Extraction des Résultats
+        // --- ÉTAPE B : Extraction des résultats (Timeout 2 secondes) ---
         if (!empty($idFFA)) {
             $urlResultats = "https://www.athle.fr/athletes/{$idFFA}/resultats";
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $urlResultats);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-            curl_setopt($ch, CURLOPT_TIMEOUT, 4);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 2);
             $htmlResultats = curl_exec($ch);
             curl_close($ch);
 
@@ -116,10 +130,8 @@ if ($action === 'run') {
                             preg_match('/^\d+/', $placeRaw, $placeMatch);
                             $place = isset($placeMatch[0]) ? $placeMatch[0] : $placeRaw;
 
-                            // Vérification propre sans mb_strtolower
                             $epreuveLower = strtolower($epreuve);
                             if (!empty($perf) && !empty($epreuve) && $epreuveLower !== "épreuve" && $epreuveLower !== "epreuve") {
-                                // Format demandé : Événement - Date \n Place : X / Temps : Y
                                 $listeCompets[] = "{$epreuve} - {$date}\nPlace : {$place} / Temps : {$perf}";
                             }
                         }
@@ -127,13 +139,12 @@ if ($action === 'run') {
                 }
                 
                 if (!empty($listeCompets)) {
-                    // On garde les 5 derniers résultats max, séparés par un double saut de ligne
                     $resultatsFormates = implode("\n\n", array_slice($listeCompets, 0, 5));
                 }
             }
         }
 
-        // Écriture à la ligne correspondante
+        // Enregistrement de la ligne
         $sheetOut->setCellValue('A' . $i, $nom);
         $sheetOut->setCellValue('B' . $i, $prenom);
         $sheetOut->setCellValue('C' . $i, $dateNaissance);
@@ -142,12 +153,13 @@ if ($action === 'run') {
         $sheetOut->getStyle('E' . $i)->getAlignment()->setWrapText(true);
     }
 
-    // Sauvegarde de l'avancement temporaire
+    // Sauvegarde immédiate du morceau traité
     $writer = new Xlsx($spreadsheetOut);
     $writer->save($outputFile);
 
     $done = ($end >= $totalRows);
     
+    // On ne supprime le fichier d'entrée que si TOUT est définitivement achevé
     if ($done && file_exists($inputFile)) {
         unlink($inputFile);
     }
@@ -159,13 +171,12 @@ if ($action === 'run') {
 // ACTION 2 : TÉLÉCHARGEMENT DU FICHIER FINAL RECONSTRUIT
 if ($action === 'download') {
     if (!file_exists($outputFile)) {
-        die("Erreur : Le fichier de résultats n'est pas disponible.");
+        die("Erreur : Le fichier généré est introuvable sur le serveur.");
     }
 
     $spreadsheetOut = IOFactory::load($outputFile);
     $sheetOut = $spreadsheetOut->getActiveSheet();
 
-    // Largeurs de colonnes fixes
     $sheetOut->getColumnDimension('A')->setWidth(20);
     $sheetOut->getColumnDimension('B')->setWidth(20);
     $sheetOut->getColumnDimension('C')->setWidth(20);
@@ -181,7 +192,6 @@ if ($action === 'download') {
     $writer = new Xlsx($spreadsheetOut);
     $writer->save('php://output');
     
-    // Suppression du fichier du serveur après téléchargement
     unlink($outputFile);
     exit;
 }
