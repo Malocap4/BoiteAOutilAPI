@@ -29,7 +29,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
 
     // Détection dynamique des index de colonnes (insensible aux majuscules/accents)
     $headers = array_map(function($h) {
-        // On passe tout en majuscule et on nettoie les espaces cachés
         return strtoupper(trim($h ?? ''));
     }, $rows[1]);
 
@@ -37,7 +36,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
     $colNom = array_search('NOM', $headers);
     $colPrenom = array_search('PRENOM', $headers);
     if ($colPrenom === false) {
-        $colPrenom = array_search('PRÉNOM', $headers); // Au cas où l'accent réapparaîtrait
+        $colPrenom = array_search('PRÉNOM', $headers);
     }
     $colDN = array_search('DATEDENAISSANCE', $headers); 
 
@@ -65,7 +64,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         $prenom = trim($rows[$i][$colPrenom] ?? '');
         $dateNaissance = ($colDN !== false) ? trim($rows[$i][$colDN] ?? '') : '';
 
-        // Si la ligne ne contient pas de nom ou prénom, on passe à la suivante
         if (empty($nom) || empty($prenom)) {
             continue;
         }
@@ -84,7 +82,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         $htmlRecherche = curl_exec($ch);
         curl_close($ch);
 
-        // Extraction de l'ID via les structures d'URL classiques de la FFA
         if ($htmlRecherche && preg_match('/code=([0-9]+)/', $htmlRecherche, $matches)) {
             $idFFA = $matches[1];
         } elseif ($htmlRecherche && preg_match('/athletes\/([0-9]+)/', $htmlRecherche, $matches)) {
@@ -104,29 +101,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             curl_close($ch);
 
             if ($htmlResultats) {
-                // Découpage du tableau HTML ligne par ligne (<tr>)
                 preg_match_all('/<tr[^>]*>(.*?)<\/tr>/is', $htmlResultats, $trMatches);
                 $listeCompets = [];
                 
                 foreach ($trMatches[1] as $trContent) {
-                    // On filtre les lignes qui contiennent des cellules de données d'épreuves
                     if (strpos($trContent, '<td>') !== false) {
                         preg_match_all('/<td[^>]*>(.*?)<\/td>/is', $trContent, $tdMatches);
                         
-                        // Une ligne de résultat FFA contient au moins 6 colonnes
                         if (count($tdMatches[1]) >= 6) {
                             $donneesLigne = array_map('clean_ffa_text', $tdMatches[1]);
                             
                             $date = $donneesLigne[0];
                             $epreuve = $donneesLigne[1];
                             $perf = $donneesLigne[2];
-                            $placeRaw = $donneesLigne[5]; // Ex: "1", "3 (3M)", "12"
+                            $placeRaw = $donneesLigne[5];
 
-                            // Extraction du premier chiffre pour identifier la place exacte
                             preg_match('/^\d+/', $placeRaw, $placeMatch);
                             $place = isset($placeMatch[0]) ? (int)$placeMatch[0] : 0;
 
-                            // Attribution de la récompense visuelle selon le classement
                             $medaille = "";
                             if ($place === 1) {
                                 $medaille = "🏆 ";
@@ -138,7 +130,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
                                 $medaille = "🏃 (".$place."e) ";
                             }
 
-                            // On n'enregistre la ligne que si elle contient une performance valide
                             if (!empty($perf) && !empty($epreuve) && $epreuve !== "Épreuve") {
                                 $listeCompets[] = "{$date} - {$epreuve} : {$medaille}{$perf}";
                             }
@@ -146,7 +137,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
                     }
                 }
                 
-                // On assemble les 5 derniers résultats max avec des retours à la ligne
                 if (!empty($listeCompets)) {
                     $resultatsFormates = implode("\n", array_slice($listeCompets, 0, 5));
                 }
@@ -160,27 +150,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         $sheetOut->setCellValueByColumnAndRow(4, $currentRowOut, $idFFA);
         $sheetOut->setCellValueByColumnAndRow(5, $currentRowOut, $resultatsFormates);
         
-        // Active l'affichage multiligne dans la cellule de l'Excel pour les émojis
         $sheetOut->getStyleByColumnAndRow(5, $currentRowOut)->getAlignment()->setWrapText(true);
         
         $currentRowOut++;
     }
 
-    // Ajustement automatique de la largeur des colonnes pour un rendu propre
-    foreach (range('A', 'E') as $col) {
-        $sheetOut->getColumnDimension($col)->setAutoSize(true);
-    }
+    // Tailles fixes de sécurité pour éviter les bugs de calcul de police sous Linux/Render
+    $sheetOut->getColumnDimension('A')->setWidth(20);
+    $sheetOut->getColumnDimension('B')->setWidth(20);
+    $sheetOut->getColumnDimension('C')->setWidth(20);
+    $sheetOut->getColumnDimension('D')->setWidth(20);
+    $sheetOut->getColumnDimension('E')->setWidth(50);
 
-    // 4. Envoi du fichier Excel généré en téléchargement direct
+    // 4. Nettoyage et envoi du fichier Excel sans interférences
+    if (ob_get_contents()) ob_end_clean(); // Supprime tout texte parasite en arrière-plan
+    
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment;filename="Resultats_FFA_Export.xlsx"');
     header('Cache-Control: max-age=0');
+    header('Pragma: public');
 
     $writer = new Xlsx($spreadsheetOut);
     $writer->save('php://output');
     exit;
 } else {
-    // Redirection automatique vers l'index si le script est appelé en direct
     header('Location: index.php');
     exit;
 }
