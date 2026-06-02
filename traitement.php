@@ -1,5 +1,5 @@
 <?php
-// Désactive la limite de temps d'exécution de PHP en arrière-plan
+// Force PHP à ne pas couper le script s'il prend du temps
 set_time_limit(0); 
 
 if (!function_exists('curl_init')) { die("L'extension cURL n'est toujours pas active sur ce serveur."); }
@@ -9,6 +9,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
+// Fonction de nettoyage du HTML de la FFA
 function clean_ffa_text($val) {
     return trim(html_entity_decode(strip_tags($val)));
 }
@@ -28,6 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         die("Erreur : Le fichier Excel est vide.");
     }
 
+    // Détection des colonnes
     $headers = array_map(function($h) {
         return strtoupper(trim($h ?? ''));
     }, $rows[1]);
@@ -40,9 +42,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
     $colDN = array_search('DATEDENAISSANCE', $headers); 
 
     if ($colNom === false || $colPrenom === false) {
-        die("Erreur : Les colonnes 'NOM' et 'PRENOM' sont obligatoires.");
+        die("Erreur : Les colonnes 'NOM' et 'PRENOM' sont obligatoires à la première ligne.");
     }
 
+    // Création du fichier de sortie
     $spreadsheetOut = new Spreadsheet();
     $sheetOut = $spreadsheetOut->getActiveSheet();
     
@@ -53,13 +56,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
     $sheetOut->setCellValue('E1', 'Résultats');
 
     $currentRowOut = 2;
+    $totalLignes = count($rows);
 
-    // --- SÉCURITÉ ANTI-TIMEOUT ---
-    // Pour éviter le Time-out 504 de Render, on limite ici le traitement aux 30 premières lignes.
-    // Tu pourras augmenter ce chiffre une fois le test validé.
-    $limiteLignes = 30; 
-    $totalLignes = min(count($rows), $limiteLignes + 1);
-
+    // Boucle sur l'intégralité du fichier Excel sans limite arbitraire
     for ($i = 2; $i <= $totalLignes; $i++) {
         $nom = trim($rows[$i][$colNom] ?? '');
         $prenom = trim($rows[$i][$colPrenom] ?? '');
@@ -69,17 +68,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             continue;
         }
 
-        $idFFA = "Introuvable";
-        $resultatsFormates = "Aucun résultat trouvé";
+        // On initialise par défaut à vide selon ta demande
+        $idFFA = "";
+        $resultatsFormates = "";
 
-        // ÉTAPE A : Recherche ID
+        // --- ÉTAPE A : Recherche de l'identifiant ---
         $urlRecherche = "https://www.athle.fr/bases/liste.aspx?frmbase=resultats&frmmode=1&frmnom=" . urlencode(strtoupper($nom)) . "&frmprenom=" . urlencode($prenom);
 
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $urlRecherche);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        curl_setopt($ch, CURLOPT_TIMEOUT, 4); // Clic max 4 secondes par requête pour ne pas bloquer
+        curl_setopt($ch, CURLOPT_TIMEOUT, 3); // Timeout court (3s max) pour garder le script rapide
         $htmlRecherche = curl_exec($ch);
         curl_close($ch);
 
@@ -89,15 +89,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             $idFFA = $matches[1];
         }
 
-        // ÉTAPE B : Récupération Résultats
-        if ($idFFA !== "Introuvable") {
+        // --- ÉTAPE B : Récupération des résultats (uniquement si l'ID a été trouvé) ---
+        if (!empty($idFFA)) {
             $urlResultats = "https://www.athle.fr/athletes/{$idFFA}/resultats";
             
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $urlResultats);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-            curl_setopt($ch, CURLOPT_TIMEOUT, 4); // Clic max 4 secondes
+            curl_setopt($ch, CURLOPT_TIMEOUT, 3); // 3s max
             $htmlResultats = curl_exec($ch);
             curl_close($ch);
 
@@ -121,10 +121,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
                             $place = isset($placeMatch[0]) ? (int)$placeMatch[0] : 0;
 
                             $medaille = "";
-                            if ($place === 1) $medaille = "🏆 ";
-                            elseif ($place === 2) $medaille = "🥈 ";
-                            elseif ($place === 3) $medaille = "🥉 ";
-                            elseif ($place > 3) $medaille = "🏃 (".$place."e) ";
+                            if ($place === 1) {
+                                $medaille = "🏆 ";
+                            } elseif ($place === 2) {
+                                $medaille = "🥈 ";
+                            } elseif ($place === 3) {
+                                $medaille = "🥉 ";
+                            } elseif ($place > 3) {
+                                $medaille = "🏃 (".$place."e) ";
+                            }
 
                             if (!empty($perf) && !empty($epreuve) && $epreuve !== "Épreuve") {
                                 $listeCompets[] = "{$date} - {$epreuve} : {$medaille}{$perf}";
@@ -139,6 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             }
         }
 
+        // Écriture dans le fichier Excel (laisse vide si rien n'a été trouvé)
         $sheetOut->setCellValue('A' . $currentRowOut, $nom);
         $sheetOut->setCellValue('B' . $currentRowOut, $prenom);
         $sheetOut->setCellValue('C' . $currentRowOut, $dateNaissance);
@@ -149,6 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         $currentRowOut++;
     }
 
+    // Configuration des dimensions fixes
     $sheetOut->getColumnDimension('A')->setWidth(20);
     $sheetOut->getColumnDimension('B')->setWidth(20);
     $sheetOut->getColumnDimension('C')->setWidth(20);
