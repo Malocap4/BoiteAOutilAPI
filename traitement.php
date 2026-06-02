@@ -1,4 +1,5 @@
 <?php
+if (!function_exists('curl_init')) { die("L'extension cURL n'est toujours pas active sur ce serveur."); }
 require 'vendor/autoload.php';
 
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
