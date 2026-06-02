@@ -12,7 +12,7 @@ $uploadDir = __DIR__ . '/uploads/';
 $inputFile = $uploadDir . $fileId . '.xlsx';
 $outputFile = $uploadDir . $fileId . '_out.xlsx';
 
-if (empty($fileId) || !preg_match('/^[a-z0-9\.]+$/i', $fileId)) {
+if (empty($fileId) || !preg_match('/^[0-9]+$/', $fileId)) {
     die(json_encode(['success' => false, 'message' => 'ID de fichier invalide.']));
 }
 
@@ -115,7 +115,7 @@ if ($action === 'run') {
                             preg_match('/^\d+/', $placeRaw, $placeMatch);
                             $place = isset($placeMatch[0]) ? $placeMatch[0] : $placeRaw;
 
-                            if (!empty($perf) && !empty($epreuve) && mb_strtolower($epreuve, 'UTF-8') !== "épreuve") { 
+                            if (!empty($perf) && !empty($epreuve) && strtolower($epreuve) !== "épreuve" && strtolower($epreuve) !== "epreuve") { 
                                 // NOUVEAU FORMATTAGE STRUCTURÉ DEMANDÉ
                                 $listeCompets[] = "{$epreuve} - {$date}\nPlace : {$place} / Temps : {$perf}";
                             }
