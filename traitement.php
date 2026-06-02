@@ -143,27 +143,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             }
         }
 
-        // Écriture forcée sur les colonnes A, B, C, D, E du fichier de sortie
-        $sheetOut->setCellValueByColumnAndRow(1, $currentRowOut, $nom);
-        $sheetOut->setCellValueByColumnAndRow(2, $currentRowOut, $prenom);
-        $sheetOut->setCellValueByColumnAndRow(3, $currentRowOut, $dateNaissance);
-        $sheetOut->setCellValueByColumnAndRow(4, $currentRowOut, $idFFA);
-        $sheetOut->setCellValueByColumnAndRow(5, $currentRowOut, $resultatsFormates);
+        // Écriture sécurisée en utilisant directement les coordonnées de cellules standard (A2, B2, etc.)
+        $sheetOut->setCellValue('A' . $currentRowOut, $nom);
+        $sheetOut->setCellValue('B' . $currentRowOut, $prenom);
+        $sheetOut->setCellValue('C' . $currentRowOut, $dateNaissance);
+        $sheetOut->setCellValue('D' . $currentRowOut, $idFFA);
+        $sheetOut->setCellValue('E' . $currentRowOut, $resultatsFormates);
         
-        $sheetOut->getStyleByColumnAndRow(5, $currentRowOut)->getAlignment()->setWrapText(true);
+        // Active l'affichage multiligne dans la cellule E pour les émojis de résultats
+        $sheetOut->getStyle('E' . $currentRowOut)->getAlignment()->setWrapText(true);
         
         $currentRowOut++;
     }
 
-    // Tailles fixes de sécurité pour éviter les bugs de calcul de police sous Linux/Render
+    // Tailles de colonnes fixes pour contourner les bugs d'auto-calcul sous Docker/Render
     $sheetOut->getColumnDimension('A')->setWidth(20);
     $sheetOut->getColumnDimension('B')->setWidth(20);
     $sheetOut->getColumnDimension('C')->setWidth(20);
     $sheetOut->getColumnDimension('D')->setWidth(20);
     $sheetOut->getColumnDimension('E')->setWidth(50);
 
-    // 4. Nettoyage et envoi du fichier Excel sans interférences
-    if (ob_get_contents()) ob_end_clean(); // Supprime tout texte parasite en arrière-plan
+    // 4. Nettoyage de sécurité des flux de sortie avant téléchargement
+    if (ob_get_contents()) ob_end_clean();
     
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment;filename="Resultats_FFA_Export.xlsx"');
