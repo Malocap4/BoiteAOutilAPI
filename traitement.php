@@ -13,7 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
     }
 
     // On sauvegarde temporairement le fichier sur le serveur
-    $fileId = uniqid();
+    $fileId = time() . rand(1000, 9999);
     $savedFilename = $uploadDir . $fileId . '.xlsx';
     move_uploaded_file($fileTmpPath, $savedFilename);
     
