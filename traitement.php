@@ -1,4 +1,7 @@
 <?php
+// Désactive la limite de temps d'exécution de PHP en arrière-plan
+set_time_limit(0); 
+
 if (!function_exists('curl_init')) { die("L'extension cURL n'est toujours pas active sur ce serveur."); }
 require 'vendor/autoload.php';
 
@@ -6,7 +9,6 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
-// Petite fonction d'aide pour nettoyer proprement le HTML renvoyé par la FFA
 function clean_ffa_text($val) {
     return trim(html_entity_decode(strip_tags($val)));
 }
@@ -15,7 +17,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
     $fileTmpPath = $_FILES['excel_file']['tmp_name'];
     
     try {
-        // 1. Chargement du fichier Excel importé
         $spreadsheetIn = IOFactory::load($fileTmpPath);
         $sheetIn = $spreadsheetIn->getActiveSheet();
         $rows = $sheetIn->toArray(null, true, true, true);
@@ -27,12 +28,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         die("Erreur : Le fichier Excel est vide.");
     }
 
-    // Détection dynamique des index de colonnes (insensible aux majuscules/accents)
     $headers = array_map(function($h) {
         return strtoupper(trim($h ?? ''));
     }, $rows[1]);
 
-    // On cherche les index correspondant à tes colonnes
     $colNom = array_search('NOM', $headers);
     $colPrenom = array_search('PRENOM', $headers);
     if ($colPrenom === false) {
@@ -40,16 +39,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
     }
     $colDN = array_search('DATEDENAISSANCE', $headers); 
 
-    // Vérification de sécurité critique
     if ($colNom === false || $colPrenom === false) {
-        die("Erreur : Les colonnes 'NOM' et 'PRENOM' sont obligatoires à la première ligne de votre fichier Excel.");
+        die("Erreur : Les colonnes 'NOM' et 'PRENOM' sont obligatoires.");
     }
 
-    // 2. Création du nouvel Excel de sortie
     $spreadsheetOut = new Spreadsheet();
     $sheetOut = $spreadsheetOut->getActiveSheet();
     
-    // Configuration des entêtes du fichier généré
     $sheetOut->setCellValue('A1', 'Nom');
     $sheetOut->setCellValue('B1', 'Prénom');
     $sheetOut->setCellValue('C1', 'DateDeNaissance');
@@ -58,8 +54,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
 
     $currentRowOut = 2;
 
-    // 3. Boucle de traitement (on démarre à 2 pour sauter la ligne des entêtes)
-    for ($i = 2; $i <= count($rows); $i++) {
+    // --- SÉCURITÉ ANTI-TIMEOUT ---
+    // Pour éviter le Time-out 504 de Render, on limite ici le traitement aux 30 premières lignes.
+    // Tu pourras augmenter ce chiffre une fois le test validé.
+    $limiteLignes = 30; 
+    $totalLignes = min(count($rows), $limiteLignes + 1);
+
+    for ($i = 2; $i <= $totalLignes; $i++) {
         $nom = trim($rows[$i][$colNom] ?? '');
         $prenom = trim($rows[$i][$colPrenom] ?? '');
         $dateNaissance = ($colDN !== false) ? trim($rows[$i][$colDN] ?? '') : '';
@@ -71,14 +72,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
         $idFFA = "Introuvable";
         $resultatsFormates = "Aucun résultat trouvé";
 
-        // --- ÉTAPE A : Recherche de l'ID Unique de l'athlète ---
+        // ÉTAPE A : Recherche ID
         $urlRecherche = "https://www.athle.fr/bases/liste.aspx?frmbase=resultats&frmmode=1&frmnom=" . urlencode(strtoupper($nom)) . "&frmprenom=" . urlencode($prenom);
 
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $urlRecherche);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        curl_setopt($ch, CURLOPT_TIMEOUT, 4); // Clic max 4 secondes par requête pour ne pas bloquer
         $htmlRecherche = curl_exec($ch);
         curl_close($ch);
 
@@ -88,15 +89,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             $idFFA = $matches[1];
         }
 
-        // --- ÉTAPE B : Si l'ID est trouvé, récupération de ses résultats ---
+        // ÉTAPE B : Récupération Résultats
         if ($idFFA !== "Introuvable") {
             $urlResultats = "https://www.athle.fr/athletes/{$idFFA}/resultats";
             
             $ch = curl_init();
             curl_setopt($ch, CURLOPT_URL, $urlResultats);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-            curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+            curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+            curl_setopt($ch, CURLOPT_TIMEOUT, 4); // Clic max 4 secondes
             $htmlResultats = curl_exec($ch);
             curl_close($ch);
 
@@ -120,15 +121,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
                             $place = isset($placeMatch[0]) ? (int)$placeMatch[0] : 0;
 
                             $medaille = "";
-                            if ($place === 1) {
-                                $medaille = "🏆 ";
-                            } elseif ($place === 2) {
-                                $medaille = "🥈 ";
-                            } elseif ($place === 3) {
-                                $medaille = "🥉 ";
-                            } elseif ($place > 3) {
-                                $medaille = "🏃 (".$place."e) ";
-                            }
+                            if ($place === 1) $medaille = "🏆 ";
+                            elseif ($place === 2) $medaille = "🥈 ";
+                            elseif ($place === 3) $medaille = "🥉 ";
+                            elseif ($place > 3) $medaille = "🏃 (".$place."e) ";
 
                             if (!empty($perf) && !empty($epreuve) && $epreuve !== "Épreuve") {
                                 $listeCompets[] = "{$date} - {$epreuve} : {$medaille}{$perf}";
@@ -143,27 +139,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             }
         }
 
-        // Écriture sécurisée en utilisant directement les coordonnées de cellules standard (A2, B2, etc.)
         $sheetOut->setCellValue('A' . $currentRowOut, $nom);
         $sheetOut->setCellValue('B' . $currentRowOut, $prenom);
         $sheetOut->setCellValue('C' . $currentRowOut, $dateNaissance);
         $sheetOut->setCellValue('D' . $currentRowOut, $idFFA);
         $sheetOut->setCellValue('E' . $currentRowOut, $resultatsFormates);
         
-        // Active l'affichage multiligne dans la cellule E pour les émojis de résultats
         $sheetOut->getStyle('E' . $currentRowOut)->getAlignment()->setWrapText(true);
-        
         $currentRowOut++;
     }
 
-    // Tailles de colonnes fixes pour contourner les bugs d'auto-calcul sous Docker/Render
     $sheetOut->getColumnDimension('A')->setWidth(20);
     $sheetOut->getColumnDimension('B')->setWidth(20);
     $sheetOut->getColumnDimension('C')->setWidth(20);
     $sheetOut->getColumnDimension('D')->setWidth(20);
     $sheetOut->getColumnDimension('E')->setWidth(50);
 
-    // 4. Nettoyage de sécurité des flux de sortie avant téléchargement
     if (ob_get_contents()) ob_end_clean();
     
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
