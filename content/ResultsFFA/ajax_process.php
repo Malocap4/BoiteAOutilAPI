@@ -47,39 +47,69 @@ if ($action === 'run') {
         exit;
     }
 
-    if (file_exists($outputFile)) {
-        $spreadsheetOut = IOFactory::load($outputFile);
-        $sheetOut = $spreadsheetOut->getActiveSheet();
-    } else {
-        $spreadsheetOut = new Spreadsheet();
-        $sheetOut = $spreadsheetOut->getActiveSheet();
-        $sheetOut->setCellValue('A1', 'Nom');
-        $sheetOut->setCellValue('B1', 'Prénom');
-        $sheetOut->setCellValue('C1', 'DateDeNaissance');
-        $sheetOut->setCellValue('D1', 'Identifiant FFA');
-        $sheetOut->setCellValue('E1', 'Résultats');
-    }
-
+    // Détection des entêtes sur le fichier d'entrée
     $headers = array_map(function($h) { return strtoupper(trim($h ?? '')); }, $rows[1]);
     $colNom = array_search('NOM', $headers);
     $colPrenom = array_search('PRENOM', $headers);
     if ($colPrenom === false) { $colPrenom = array_search('PRÉNOM', $headers); }
-    $colDN = array_search('DATEDENAISSANCE', $headers);
+
+    if ($colNom === false || $colPrenom === false) {
+        echo json_encode(['success' => false, 'message' => "Colonnes 'NOM' et 'PRENOM' introuvables."]);
+        exit;
+    }
+
+    // Initialisation ou rechargement du fichier de sortie (qui garde TOUTES les colonnes d'origine)
+    if (file_exists($outputFile)) {
+        $spreadsheetOut = IOFactory::load($outputFile);
+        $sheetOut = $spreadsheetOut->getActiveSheet();
+    } else {
+        // Au premier tour, on clone la structure complète du fichier d'entrée
+        $spreadsheetOut = clone $spreadsheetIn;
+        $sheetOut = $spreadsheetOut->getActiveSheet();
+        
+        // On cherche la première colonne vide à la fin pour ajouter nos données sans écraser le reste
+        $highestColumn = $sheetOut->getHighestColumn();
+        $highestColumnIndex = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::columnIndexFromString($highestColumn);
+        
+        // Définition des coordonnées des 3 nouvelles colonnes
+        $colIndexFFA = $highestColumnIndex + 1;
+        $colIndexLicence = $highestColumnIndex + 2;
+        $colIndexResultats = $highestColumnIndex + 3;
+        
+        // On stocke ces index dans un fichier temporaire pour les tours (chunks) suivants
+        file_put_contents($uploadDir . $fileId . '_cols.json', json_encode([
+            'ffa' => $colIndexFFA,
+            'licence' => $colIndexLicence,
+            'res' => $colIndexResultats
+        ]));
+
+        // Écriture des entêtes à la fin du tableau existant
+        $sheetOut->setCellValueByColumnAndRow($colIndexFFA, 1, 'Identifiant FFA');
+        $sheetOut->setCellValueByColumnAndRow($colIndexLicence, 1, 'Licence');
+        $sheetOut->setCellValueByColumnAndRow($colIndexResultats, 1, 'Résultats');
+    }
+
+    // Récupération des colonnes dynamiques de sortie
+    $colsConfig = json_decode(file_get_contents($uploadDir . $fileId . '_cols.json'), true);
+    $colIndexFFA = $colsConfig['ffa'];
+    $colIndexLicence = $colsConfig['licence'];
+    $colIndexResultats = $colsConfig['res'];
 
     $end = min($totalRows, $start + $chunkSize - 1);
 
     for ($i = $start; $i <= $end; $i++) {
         $nom = trim($rows[$i][$colNom] ?? '');
         $prenom = trim($rows[$i][$colPrenom] ?? '');
-        $dateNaissance = ($colDN !== false) ? trim($rows[$i][$colDN] ?? '') : '';
 
         if (empty($nom) || empty($prenom)) {
             continue;
         }
 
         $idFFA = "";
+        $numLicence = "";
         $resultatsFormates = "";
 
+        // 1. Recherche de l'ID de l'athlète
         $urlRecherche = "https://www.athle.fr/bases/liste.aspx?frmbase=resultats&frmmode=1&frmnom=" . urlencode(strtoupper($nom)) . "&frmprenom=" . urlencode($prenom);
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $urlRecherche);
@@ -96,6 +126,7 @@ if ($action === 'run') {
             $idFFA = $matches[1];
         }
 
+        // 2. Extraction de la Licence et des Résultats si l'ID est trouvé
         if (!empty($idFFA)) {
             $urlResultats = "https://www.athle.fr/athletes/{$idFFA}/resultats";
             $ch = curl_init();
@@ -108,6 +139,11 @@ if ($action === 'run') {
             curl_close($ch);
 
             if ($htmlResultats) {
+                // Récupération du numéro de licence dans le profil
+                if (preg_match('/Licence\s*:\s*<\/b>\s*([0-9]+)/is', $htmlResultats, $licenceMatches)) {
+                    $numLicence = trim($licenceMatches[1]);
+                }
+
                 preg_match_all('/<tr[^>]*>(.*?)<\/tr>/is', $htmlResultats, $trMatches);
                 $listeCompets = [];
                 
@@ -115,14 +151,13 @@ if ($action === 'run') {
                     if (strpos($trContent, '<td>') !== false) {
                         preg_match_all('/<td[^>]*>(.*?)<\/td>/is', $trContent, $tdMatches);
                         
-                        // Si la ligne contient bien le nombre de colonnes attendu
                         if (count($tdMatches[1]) >= 6) {
                             $donneesLigne = array_map('clean_ffa_text', $tdMatches[1]);
                             
                             $date = $donneesLigne[0];
                             $courseType = $donneesLigne[1]; 
                             $perf = $donneesLigne[2];       
-                            $lieu = $donneesLigne[3]; // Contient la ville/département
+                            $lieu = $donneesLigne[3]; 
                             $evenement = $donneesLigne[4];  
                             $placeRaw = $donneesLigne[5];   
 
@@ -131,53 +166,64 @@ if ($action === 'run') {
                                 continue;
                             }
 
-                            // CORRECTION 1 : Si l'évènement est vide ou identique au type, on combine intelligemment avec le lieu
                             if (empty($evenement) || strtolower($evenement) === $courseLower) {
                                 $evenement = $courseType . " de " . $lieu;
                             } else {
-                                // Sinon, on affiche le combo complet : "Nom de l'évènement - [Type de course]"
                                 $evenement = $evenement . " [" . $courseType . "]";
                             }
 
-                            // CORRECTION 2 : Gestion du classement décalé par le lieu
-                            // On extrait uniquement le premier nombre rencontré dans la colonne place
+                            // Nettoyage et gestion sélective des émojis de classement
+                            // Nettoyage et gestion sélective des émojis de classement
                             preg_match('/^\d+/', $placeRaw, $placeMatch);
-                            
+                            $emojiClassement = "";
+
                             if (isset($placeMatch[0]) && is_numeric($placeMatch[0])) {
-                                $place = $placeMatch[0];
-                                $placeFormatee = ($place == 1) ? "1er" : $place . "e";
+                                $place = (int)$placeMatch[0];
+                                if ($place === 1) {
+                                    $emojiClassement = "🏆 ";
+                                    $placeFormatee = "1er";
+                                } elseif ($place === 2) {
+                                    $emojiClassement = "🥈 "; // Médaille d'argent pour le 2e
+                                    $placeFormatee = "2e";
+                                } elseif ($place === 3) {
+                                    $emojiClassement = "🥉 "; // Médaille de bronze pour le 3e
+                                    $placeFormatee = "3e";
+                                } else {
+                                    $placeFormatee = $place . "e";
+                                }
                             } else {
-                                // Si aucun chiffre n'est détecté au début (ex: un nom de ville s'est glissé ici), on n'affiche pas de classement erroné
                                 $placeFormatee = "Classé";
                             }
 
-                            $blocResultat = "★ {$evenement}\n📅 {$date}\n🏆 Place : {$placeFormatee} / Temps : {$perf}";
+                            // Sortie propre sans émojis étoiles ou calendriers
+                            $blocResultat = "- {$evenement} ({$date}) -> Place : {$emojiClassement}{$placeFormatee} / Temps : {$perf}";
                             $listeCompets[] = $blocResultat;
                         }
                     }
                 }
                 
                 if (!empty($listeCompets)) {
-                    // On prend les 5 compétitions les plus récentes trouvées
-                    $resultatsFormates = implode("\n\n", array_slice($listeCompets, 0, 5));
+                    $resultatsFormates = implode("\n", array_slice($listeCompets, 0, 5));
                 }
             }
         }
 
-        $sheetOut->setCellValue('A' . $i, $nom);
-        $sheetOut->setCellValue('B' . $i, $prenom);
-        $sheetOut->setCellValue('C' . $i, $dateNaissance);
-        $sheetOut->setCellValue('D' . $i, $idFFA);
-        $sheetOut->setCellValue('E' . $i, $resultatsFormates);
-        $sheetOut->getStyle('E' . $i)->getAlignment()->setWrapText(true);
+        // Écritures des données dans les colonnes ajoutées à la fin
+        $sheetOut->setCellValueByColumnAndRow($colIndexFFA, $i, $idFFA);
+        $sheetOut->setCellValueByColumnAndRow($colIndexLicence, $i, $numLicence);
+        $sheetOut->setCellValueByColumnAndRow($colIndexResultats, $i, $resultatsFormates);
+        $sheetOut->getCellByColumnAndRow($colIndexResultats, $i)->getStyle()->getAlignment()->setWrapText(true);
     }
 
     $writer = new Xlsx($spreadsheetOut);
     $writer->save($outputFile);
 
     $done = ($end >= $totalRows);
-    if ($done && file_exists($inputFile)) {
-        unlink($inputFile);
+    if ($done) {
+        if (file_exists($inputFile)) {
+            unlink($inputFile);
+        }
+        @unlink($uploadDir . $fileId . '_cols.json');
     }
 
     echo json_encode(['success' => true, 'next' => $end + 1, 'done' => $done]);
@@ -192,11 +238,9 @@ if ($action === 'download') {
     $spreadsheetOut = IOFactory::load($outputFile);
     $sheetOut = $spreadsheetOut->getActiveSheet();
 
-    $sheetOut->getColumnDimension('A')->setWidth(18);
-    $sheetOut->getColumnDimension('B')->setWidth(18);
-    $sheetOut->getColumnDimension('C')->setWidth(18);
-    $sheetOut->getColumnDimension('D')->setWidth(18);
-    $sheetOut->getColumnDimension('E')->setWidth(75); // Cellule élargie pour accueillir la mise en forme claire
+    // Auto-ajustement de la largeur de la colonne résultats qui est tout à la fin
+    $highestColumn = $sheetOut->getHighestColumn();
+    $sheetOut->getColumnDimension($highestColumn)->setWidth(85);
 
     if (ob_get_contents()) ob_get_contents(); ob_end_clean();
 
