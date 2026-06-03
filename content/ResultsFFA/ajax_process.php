@@ -1,7 +1,7 @@
 <?php
 // On empêche le script de saturer la mémoire ou le temps système
 set_time_limit(20);
-require 'vendor/autoload.php';
+require __DIR__ . '/../../vendor/autoload.php';
 
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
