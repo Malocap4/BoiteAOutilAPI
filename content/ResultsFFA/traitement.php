@@ -70,33 +70,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['excel_file'])) {
             const totalRows = <?php echo $totalRows; ?>;
             let currentLine = 2;
 
-            function processNextChunk() {
+            // Fonction utilitaire pour créer une pause (delay)
+            const delay = ms => new Promise(res => setTimeout(res, ms));
+
+            async function processNextChunk() {
                 document.getElementById('status').innerText = "Traitement des participants : Ligne " + currentLine + " sur " + totalRows;
                 
-                fetch(`ajax_process.php?action=run&fileId=${fileId}&start=${currentLine}`)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.success) {
-                            currentLine = data.next;
-                            let percent = Math.min(100, Math.round((currentLine / totalRows) * 100));
-                            document.getElementById('bar').style.width = percent + "%";
+                try {
+                    // On effectue l'appel vers l'extracteur PHP
+                    const response = await fetch(`ajax_process.php?action=run&fileId=${fileId}&start=${currentLine}&maxRows=${totalRows}`);
+                    const data = await response.json();
 
-                            if (data.done) {
-                                document.getElementById('status').innerText = "Traitement terminé avec succès !";
-                                document.getElementById('dl-btn').style.display = "inline-block";
-                            } else {
-                                processNextChunk();
-                            }
+                    if (data.success) {
+                        currentLine = data.next;
+                        let percent = Math.min(100, Math.round((currentLine / totalRows) * 100));
+                        document.getElementById('bar').style.width = percent + "%";
+
+                        if (data.done) {
+                            document.getElementById('status').innerText = "Traitement terminé avec succès !";
+                            document.getElementById('dl-btn').style.display = "inline-block";
                         } else {
-                            document.getElementById('status').innerText = "Erreur : " + data.message;
+                            // OPTIMISATION CRITIQUE : On attend 1500ms (1.5s) avant de traiter le lot suivant
+                            await delay(1500);
+                            processNextChunk();
                         }
-                    }).catch(err => {
-                        document.getElementById('status').innerText = "Erreur réseau, tentative de reprise...";
-                        setTimeout(processNextChunk, 2000);
-                    });
+                    } else {
+                        document.getElementById('status').innerText = "Erreur : " + data.message;
+                    }
+                } catch (err) {
+                    document.getElementById('status').innerText = "Erreur réseau (Sécurité FFA), nouvelle tentative dans 4 secondes...";
+                    // En cas d'erreur réseau, on attend plus longtemps (4s) avant de retenter
+                    await delay(4000);
+                    processNextChunk();
+                }
             }
 
-            // Lancement du traitement asynchrone
+            // Lancement initial du traitement
             processNextChunk();
         </script>
     </body>
