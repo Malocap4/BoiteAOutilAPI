@@ -25,7 +25,7 @@ function clean_ffa_text($val) {
 if ($action === 'run') {
     $start = (int)($_GET['start'] ?? 2);
     $maxRows = (int)($_GET['maxRows'] ?? 0); 
-    $chunkSize = 5; // Traitement par paquet de 3 lignes pour éviter les surcharges réseau
+    $chunkSize = 2; // Traitement par paquet de 3 lignes pour éviter les surcharges réseau
 
     // Si le fichier source a déjà été nettoyé et que le traitement est fini
     if (!file_exists($inputFile) && file_exists($outputFile) && $start > 2) {
