@@ -34,8 +34,8 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 RUN composer install --no-dev --optimize-autoloader
 
 # 8. Attribution des permissions pour Apache et la création des dossiers d'uploads
-RUN chown -r www-data:www-data /var/www/html \
-    && chmod -r 755 /var/www/html
+RUN chown -R www-data:www-data /var/www/html \
+    && chmod -R 755 /var/www/html
 
 # Définition du répertoire de travail
 WORKDIR /var/www/html
