@@ -84,6 +84,9 @@ function launchExe(path) {
   <div class="container">
     <a href="./content/ResultsFFA/index.php" class="box blue">Profil de Dénivelé</a>
   </div>
+  <div class="container">
+    <a href="./content/ResultsFFAsynch/index.php" class="box blue">Profil de Dénivelé</a>
+  </div>
 </body>
 
     
