@@ -4,6 +4,9 @@ Déposer le dossier sur un serveur PHP avec l’extension cURL activée. Le doss
 
 ## Flux RaceResult utilisé
 
+V5 recolle au flux de l’application exemple : host `https://events.raceresult.com`, login `/api/public/login`, eventlist `/api/public/eventlist`, puis endpoints évènement `/_EventID/api/...`. Un fichier `data/rr_eventlist_debug.json` est créé à chaque chargement pour contrôler le nombre brut renvoyé par année avant filtrage par dates.
+
+
 1. La clé API RaceResult est saisie une première fois dans l’interface.
 2. Le soft génère un Bearer token via :
    `POST https://events.raceresult.com/api/public/login`
