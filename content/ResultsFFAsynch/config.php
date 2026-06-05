@@ -1,0 +1,31 @@
+<?php
+return [
+    // Sécurité simple de l'interface. Changez cette valeur.
+    'admin_password' => 'change-me',
+
+    // SQLite local
+    'db_path' => __DIR__ . '/data/sync.sqlite',
+
+    // RaceResult
+    'rr_login_url' => 'https://events.raceresult.com/api/public/login',
+    'rr_base_url' => 'https://events.raceresult.com',
+    'rr_lang' => 'en-fr',
+
+    // FFA / athle.fr
+    'ffa_base_url' => 'https://www.athle.fr',
+    'ffa_user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0 Safari/537.36',
+
+    // Rythme de scraping FFA, en microsecondes.
+    // 500000 = 0,5 seconde entre deux coureurs non présents en cache.
+    'ffa_delay_us' => 500000,
+
+    // Nombre max de coureurs traités par exécution cron.
+    'max_participants_per_run' => 50,
+
+    // Nombre max de résultats FFA à stocker dans le palmarès.
+    'max_palmares_results' => 8,
+
+    // Plage événement par défaut dans l'UI
+    'default_days_before' => 15,
+    'default_days_after' => 30,
+];
