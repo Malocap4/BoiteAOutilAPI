@@ -7,7 +7,10 @@ try {
     if ($action === 'save_settings') {
         $settings['rr_api_key'] = trim($_POST['rr_api_key'] ?? '');
         $settings['rr_event_id'] = trim($_POST['rr_event_id'] ?? '');
-        $settings['rr_api_base_template'] = trim($_POST['rr_api_base_template'] ?? $settings['rr_api_base_template']);
+        $settings['rr_public_base'] = trim($_POST['rr_public_base'] ?? $settings['rr_public_base']);
+        $settings['rr_event_base'] = trim($_POST['rr_event_base'] ?? $settings['rr_event_base']);
+        $settings['event_date_from'] = trim($_POST['event_date_from'] ?? $settings['event_date_from']);
+        $settings['event_date_to'] = trim($_POST['event_date_to'] ?? $settings['event_date_to']);
         $settings['ffa_season'] = (int)($_POST['ffa_season'] ?? date('Y'));
         $settings['udf_license'] = trim($_POST['udf_license'] ?? '');
         $settings['udf_ffa_id'] = trim($_POST['udf_ffa_id'] ?? '');
@@ -17,21 +20,29 @@ try {
     } elseif ($action === 'load_events') {
         $tmp = $settings;
         $tmp['rr_api_key'] = trim($_POST['rr_api_key'] ?? $settings['rr_api_key']);
-        $tmp['rr_api_base_template'] = trim($_POST['rr_api_base_template'] ?? $settings['rr_api_base_template']);
+        $tmp['rr_public_base'] = trim($_POST['rr_public_base'] ?? $settings['rr_public_base']);
+        $tmp['rr_event_base'] = trim($_POST['rr_event_base'] ?? $settings['rr_event_base']);
+        $tmp['event_date_from'] = trim($_POST['event_date_from'] ?? $settings['event_date_from']);
+        $tmp['event_date_to'] = trim($_POST['event_date_to'] ?? $settings['event_date_to']);
         $rr = new RaceResultClient($tmp, false);
-        $events = $rr->loadEvents();
+        $events = $rr->loadEvents($tmp['event_date_from'], $tmp['event_date_to']);
         Store::write('events.json', $events);
         $settings['rr_api_key'] = $tmp['rr_api_key'];
-        $settings['rr_api_base_template'] = $tmp['rr_api_base_template'];
+        $settings['rr_public_base'] = $tmp['rr_public_base'];
+        $settings['rr_event_base'] = $tmp['rr_event_base'];
+        $settings['event_date_from'] = $tmp['event_date_from'];
+        $settings['event_date_to'] = $tmp['event_date_to'];
+        $settings['rr_token'] = $tmp['rr_token'] ?? ($settings['rr_token'] ?? '');
+        $settings['rr_token_expires_at'] = $tmp['rr_token_expires_at'] ?? ($settings['rr_token_expires_at'] ?? 0);
         Settings::save($settings);
         $result = ['type'=>'ok','message'=>count($events).' évènement(s) chargé(s) depuis RaceResult.'];
     } elseif ($action === 'load_udfs') {
         $tmp = $settings;
-        foreach(['rr_api_key','rr_event_id','rr_api_base_template'] as $k) $tmp[$k] = trim($_POST[$k] ?? $settings[$k]);
+        foreach(['rr_api_key','rr_event_id','rr_public_base','rr_event_base'] as $k) $tmp[$k] = trim($_POST[$k] ?? $settings[$k]);
         $rr = new RaceResultClient($tmp, true);
         $udfs = $rr->loadUdfs();
         Store::write('udfs_'.$tmp['rr_event_id'].'.json', $udfs);
-        $settings['rr_api_key']=$tmp['rr_api_key']; $settings['rr_event_id']=$tmp['rr_event_id']; $settings['rr_api_base_template']=$tmp['rr_api_base_template'];
+        $settings['rr_api_key']=$tmp['rr_api_key']; $settings['rr_event_id']=$tmp['rr_event_id']; $settings['rr_public_base']=$tmp['rr_public_base']; $settings['rr_event_base']=$tmp['rr_event_base'];
         Settings::save($settings);
         $result = ['type'=>'ok','message'=>count($udfs).' UDF chargé(s) depuis RaceResult.'];
     } elseif ($action === 'load_participants') {
@@ -65,18 +76,21 @@ function udfOptions(array $udfs, string $selected): string { $html='<option valu
 <section class="card"><h2>1. Connexion RaceResult</h2>
 <form method="post" class="grid"><input type="hidden" name="action" value="load_events">
 <label>Clé API RaceResult <input type="password" name="rr_api_key" value="<?= h($settings['rr_api_key']) ?>" autocomplete="off"></label>
-<label>Base API RR avancée <input name="rr_api_base_template" value="<?= h($settings['rr_api_base_template']) ?>"></label>
+<label>API public RR <input name="rr_public_base" value="<?= h($settings['rr_public_base']) ?>"></label>
+<label>Base événements RR <input name="rr_event_base" value="<?= h($settings['rr_event_base']) ?>"></label>
+<label>Date début <input type="date" name="event_date_from" value="<?= h($settings['event_date_from']) ?>"></label>
+<label>Date fin <input type="date" name="event_date_to" value="<?= h($settings['event_date_to']) ?>"></label>
 <div class="actions"><button>Charger les évènements du compte</button></div></form>
 <p class="small"><?= count($events) ?> évènement(s) en cache.</p></section>
 <section class="card"><h2>2. Évènement et UDF</h2>
 <form method="post" class="grid"><input type="hidden" name="action" value="load_udfs">
-<input type="hidden" name="rr_api_key" value="<?= h($settings['rr_api_key']) ?>"><input type="hidden" name="rr_api_base_template" value="<?= h($settings['rr_api_base_template']) ?>">
-<label>Évènement RaceResult <select name="rr_event_id"><option value="">— choisir —</option><?php foreach($events as $ev): $id=$ev['id']??''; ?><option value="<?=h($id)?>" <?=$id===$settings['rr_event_id']?'selected':''?>><?=h(($ev['date']??'').' — '.($ev['name']??'').' ['.$id.']')?></option><?php endforeach; ?></select></label>
+<input type="hidden" name="rr_api_key" value="<?= h($settings['rr_api_key']) ?>"><input type="hidden" name="rr_public_base" value="<?= h($settings['rr_public_base']) ?>"><input type="hidden" name="rr_event_base" value="<?= h($settings['rr_event_base']) ?>">
+<label>Évènement RaceResult <select name="rr_event_id"><option value="">— choisir —</option><?php foreach($events as $ev): $id=$ev['id']??''; ?><option value="<?=h($id)?>" <?=$id===$settings['rr_event_id']?'selected':''?>><?=h(($ev['name']??'').' ('.($ev['date']??'').')')?></option><?php endforeach; ?></select></label>
 <label>Saison FFA <input type="number" name="ffa_season" value="<?= h($settings['ffa_season']) ?>"></label>
 <div class="actions"><button>Charger les UDF de l’évènement</button></div></form>
 <form method="post" class="grid topgap"><input type="hidden" name="action" value="save_settings">
-<input type="hidden" name="rr_api_key" value="<?= h($settings['rr_api_key']) ?>"><input type="hidden" name="rr_api_base_template" value="<?= h($settings['rr_api_base_template']) ?>">
-<label>Évènement RaceResult <select name="rr_event_id"><option value="<?=h($settings['rr_event_id'])?>"><?=h($settings['rr_event_id'] ?: '— aucun —')?></option><?php foreach($events as $ev): $id=$ev['id']??''; ?><option value="<?=h($id)?>" <?=$id===$settings['rr_event_id']?'selected':''?>><?=h(($ev['date']??'').' — '.($ev['name']??'').' ['.$id.']')?></option><?php endforeach; ?></select></label>
+<input type="hidden" name="rr_api_key" value="<?= h($settings['rr_api_key']) ?>"><input type="hidden" name="rr_public_base" value="<?= h($settings['rr_public_base']) ?>"><input type="hidden" name="rr_event_base" value="<?= h($settings['rr_event_base']) ?>">
+<label>Évènement RaceResult <select name="rr_event_id"><option value="<?=h($settings['rr_event_id'])?>"><?=h($settings['rr_event_id'] ?: '— aucun —')?></option><?php foreach($events as $ev): $id=$ev['id']??''; ?><option value="<?=h($id)?>" <?=$id===$settings['rr_event_id']?'selected':''?>><?=h(($ev['name']??'').' ('.($ev['date']??'').')')?></option><?php endforeach; ?></select></label>
 <label>Saison FFA <input type="number" name="ffa_season" value="<?= h($settings['ffa_season']) ?>"></label>
 <label>UDF licence FFA <select name="udf_license"><?= udfOptions($udfs, $settings['udf_license']) ?></select></label>
 <label>UDF ID participant FFA <select name="udf_ffa_id"><?= udfOptions($udfs, $settings['udf_ffa_id']) ?></select></label>

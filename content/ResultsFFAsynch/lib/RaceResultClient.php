@@ -3,99 +3,101 @@ class RaceResultClient {
     private array $s;
     public function __construct(array $settings, bool $eventRequired = true){
         $this->s=$settings;
-        if(!$this->s['rr_api_key']) throw new RuntimeException('Clé API RaceResult manquante.');
-        if($eventRequired && !$this->s['rr_event_id']) throw new RuntimeException('Event ID RaceResult manquant.');
+        if(empty($this->s['rr_api_key'])) throw new RuntimeException('Clé API RaceResult manquante.');
+        if($eventRequired && empty($this->s['rr_event_id'])) throw new RuntimeException('Event ID RaceResult manquant.');
     }
-    private function rootBase(): string {
-        $tpl = trim($this->s['rr_api_base_template'] ?? 'https://api.raceresult.com/event/{eventId}/');
-        $pos = strpos($tpl, '{eventId}');
-        if ($pos !== false) return rtrim(substr($tpl, 0, $pos), '/').'/';
-        $tpl = preg_replace('~/event/[^/]+/?$~', '/', rtrim($tpl,'/')) ?: $tpl;
-        return rtrim($tpl, '/').'/';
-    }
-    private function url(string $endpoint, array $q=[]): string {
-        $base = str_replace('{eventId}', rawurlencode($this->s['rr_event_id'] ?? ''), rtrim($this->s['rr_api_base_template'],'/').'/');
-        $q['apiKey']=$this->s['rr_api_key'];
-        return $base.ltrim($endpoint,'/').'?'.http_build_query($q);
-    }
-    private function accountUrl(string $endpoint, array $q=[]): string {
-        $q['apiKey']=$this->s['rr_api_key'];
-        return $this->rootBase().ltrim($endpoint,'/').'?'.http_build_query($q);
-    }
-    private function headers(): array { return ['Accept: application/json','Authorization: Bearer '.$this->s['rr_api_key'], 'X-API-Key: '.$this->s['rr_api_key']]; }
+    private function publicBase(): string { return rtrim($this->s['rr_public_base'] ?? 'https://events.raceresult.com/api/public','/'); }
+    private function eventBase(): string { return rtrim($this->s['rr_event_base'] ?? 'https://events.raceresult.com','/'); }
     private function decode(string $raw): array {
         $data=json_decode($raw,true);
-        if(!is_array($data)) throw new RuntimeException('Réponse JSON invalide: '.substr($raw,0,500));
+        if(!is_array($data)) throw new RuntimeException('Réponse JSON RaceResult invalide: '.substr($raw,0,800));
         return $data;
     }
-    private function firstWorking(array $urls, callable $normalizer, string $label): array {
-        $last='';
-        foreach($urls as $url){
-            try {
-                $raw=Http::get($url,$this->headers());
-                $data=$this->decode($raw);
-                $rows=$normalizer($data);
-                if(is_array($rows)) return $rows;
-            } catch(Throwable $e){ $last=$e->getMessage(); }
-        }
-        throw new RuntimeException("Impossible de charger $label. Dernière erreur: ".$last);
+    private function tokenHeaders(): array { return ['Accept: application/json','Authorization: Bearer '.$this->getToken()]; }
+    public function getToken(bool $force=false): string {
+        $now=time();
+        if(!$force && !empty($this->s['rr_token']) && (int)($this->s['rr_token_expires_at']??0) > $now+120) return $this->s['rr_token'];
+        return $this->login();
     }
-    public function loadEvents(): array {
-        $attempts = [
-            $this->accountUrl('events'),
-            $this->accountUrl('event/list'),
-            $this->accountUrl('events/list'),
-            $this->accountUrl('event/getevents'),
-            $this->accountUrl('account/events'),
+    private function login(): string {
+        $url=$this->publicBase().'/login';
+        $attempts=[
+            fn()=>Http::postForm($url, ['apiKey'=>$this->s['rr_api_key']], ['Accept: application/json']),
+            fn()=>Http::postRaw($url, '', ['Accept: application/json','Authorization: Bearer '.$this->s['rr_api_key'],'Content-Type: application/x-www-form-urlencoded']),
+            fn()=>Http::postRaw($url, '', ['Accept: application/json','X-API-Key: '.$this->s['rr_api_key'],'Content-Type: application/x-www-form-urlencoded']),
+            fn()=>Http::postRaw($url.'?apiKey='.rawurlencode($this->s['rr_api_key']), '', ['Accept: application/json','Content-Type: application/x-www-form-urlencoded']),
         ];
-        return $this->firstWorking($attempts, fn($d)=>$this->normalizeEvents($d), 'les évènements RaceResult');
-    }
-    private function normalizeEvents(array $data): array {
-        $rows = $data['data'] ?? $data['rows'] ?? $data['events'] ?? $data['Event'] ?? $data;
-        if(!is_array($rows)) return [];
-        $out=[];
-        foreach($rows as $r){
-            if(!is_array($r)) continue;
-            $id=$r['ID']??$r['Id']??$r['id']??$r['EventID']??$r['eventID']??$r['eventId']??null;
-            $name=$r['Name']??$r['name']??$r['EventName']??$r['eventName']??$r['Title']??$r['title']??('Event '.$id);
-            $date=$r['Date']??$r['date']??$r['StartDate']??$r['startDate']??'';
-            if($id) $out[]=['id'=>(string)$id,'name'=>(string)$name,'date'=>(string)$date];
+        $last='';
+        foreach($attempts as $try){
+            try{
+                $data=$this->decode($try());
+                $token=$data['token']??$data['Token']??$data['access_token']??$data['AccessToken']??(is_string($data[0]??null)?$data[0]:null);
+                if(!$token) throw new RuntimeException('Token introuvable dans la réponse login: '.json_encode($data, JSON_UNESCAPED_UNICODE));
+                $ttl=(int)($data['expires_in']??$data['ExpiresIn']??3600);
+                $this->s['rr_token']=$token; $this->s['rr_token_expires_at']=time()+max(300,$ttl);
+                $saved=Settings::load(); $saved['rr_api_key']=$this->s['rr_api_key']; $saved['rr_token']=$token; $saved['rr_token_expires_at']=$this->s['rr_token_expires_at']; Settings::save($saved);
+                return $token;
+            }catch(Throwable $e){ $last=$e->getMessage(); }
         }
-        usort($out, fn($a,$b)=>strcmp(($b['date']??''),($a['date']??'')) ?: strcmp($a['name'],$b['name']));
+        throw new RuntimeException('Login RaceResult impossible. Dernière erreur: '.$last);
+    }
+    private function rrGet(string $url): string {
+        try { return Http::get($url, $this->tokenHeaders()); }
+        catch(Throwable $e){ $this->getToken(true); return Http::get($url, $this->tokenHeaders()); }
+    }
+    private function rrPostRaw(string $url, string $body, array $headers=[]): string {
+        $headers=array_merge($headers, $this->tokenHeaders());
+        try { return Http::postRaw($url, $body, $headers); }
+        catch(Throwable $e){ $this->getToken(true); $headers=array_merge(['Authorization: Bearer '.$this->s['rr_token']], array_filter($headers, fn($h)=>stripos($h,'Authorization:')!==0)); return Http::postRaw($url, $body, $headers); }
+    }
+    private function rrPostJson(string $url, $payload): string {
+        try { return Http::postJson($url, $payload, $this->tokenHeaders()); }
+        catch(Throwable $e){ $this->getToken(true); return Http::postJson($url, $payload, $this->tokenHeaders()); }
+    }
+    public function loadEvents(?string $from=null, ?string $to=null): array {
+        $from=$from ?: ($this->s['event_date_from'] ?? date('Y-m-d', strtotime('-15 days')));
+        $to=$to ?: ($this->s['event_date_to'] ?? date('Y-m-d', strtotime('+1 month')));
+        $y1=(int)substr($from,0,4); $y2=(int)substr($to,0,4); if($y2<$y1) [$y1,$y2]=[$y2,$y1];
+        $all=[];
+        for($y=$y1;$y<=$y2;$y++){
+            $q=['year'=>$y,'filter'=>'','addsettings'=>'EventName,EventDate,EventDate2,EventLocation,EventCountry'];
+            $url=$this->publicBase().'/eventlist?'.http_build_query($q);
+            $rows=$this->decode($this->rrGet($url));
+            foreach($rows as $r){ if(is_array($r)) $all[]=$r; }
+        }
+        $out=[]; $seen=[];
+        foreach($all as $r){
+            $id=(string)($r['ID']??''); if(!$id || isset($seen[$id])) continue;
+            $d1=(string)($r['EventDate']??''); $d2=(string)($r['EventDate2']??$d1);
+            if($d1 && $d1>$to) continue; if($d2 && $d2<$from) continue;
+            $seen[$id]=1;
+            $out[]=['id'=>$id,'name'=>(string)($r['EventName']??('Event '.$id)),'date'=>$d1,'date2'=>$d2,'location'=>(string)($r['EventLocation']??''),'participants'=>(int)($r['Participants']??0),'raw'=>$r];
+        }
+        usort($out, fn($a,$b)=>strcmp($a['date'],$b['date']) ?: strcmp($a['name'],$b['name']));
         return $out;
     }
     public function loadUdfs(): array {
-        $attempts = [
-            $this->url('userdefinedfields'),
-            $this->url('userdefinedfields/list'),
-            $this->url('userdefinedfields/get'),
-            $this->url('udf/list'),
-            $this->url('customfields'),
-            $this->url('customfields/list'),
-        ];
-        return $this->firstWorking($attempts, fn($d)=>$this->normalizeUdfs($d), 'les UDF RaceResult');
-    }
-    private function normalizeUdfs(array $data): array {
-        $rows = $data['data'] ?? $data['rows'] ?? $data['userDefinedFields'] ?? $data['UserDefinedFields'] ?? $data['customFields'] ?? $data;
-        if(!is_array($rows)) return [];
+        $eventId=trim((string)$this->s['rr_event_id']);
+        $url=$this->eventBase().'/_'.rawurlencode($eventId).'/api/multirequest?lang=en-fr';
+        $data=$this->decode($this->rrPostRaw($url, '["Fields"]', ['Content-Type: text/plain;charset=UTF-8']));
+        $rows=$data['Fields']??[];
         $out=[];
-        foreach($rows as $k=>$r){
-            if(is_string($r)) { $out[]=['field'=>$r,'label'=>$r]; continue; }
-            if(!is_array($r)) continue;
-            $field=$r['Field']??$r['field']??$r['Name']??$r['name']??$r['Key']??$r['key']??$r['ID']??$r['id']??(is_string($k)?$k:null);
-            $label=$r['Label']??$r['label']??$r['Caption']??$r['caption']??$r['Title']??$r['title']??$field;
-            if($field) $out[]=['field'=>(string)$field,'label'=>(string)$label];
+        foreach($rows as $r){
+            if(!is_array($r) || empty($r['Name'])) continue;
+            $name=(string)$r['Name']; $label=trim((string)($r['Label']??'')); $group=trim((string)($r['Group']??''));
+            $title=($group?"[$group] ":'').($label ?: $name);
+            if($label && $label!==$name) $title.=' — '.$name;
+            $out[]=['field'=>$name,'label'=>$title,'id'=>(string)($r['ID']??''),'enabled'=>(bool)($r['Enabled']??true),'raw'=>$r];
         }
         usort($out, fn($a,$b)=>strcmp($a['label'],$b['label']));
         return $out;
     }
     public function loadParticipants(): array {
         $fields = ['ID','Firstname','Lastname','DateOfBirth'];
-        $attempts = [
-            $this->url('list/data', ['fields'=>implode(',',$fields),'format'=>'json']),
-            $this->url('table/get', ['name'=>'Participants','fields'=>implode(',',$fields)]),
-        ];
-        return $this->firstWorking($attempts, fn($d)=>$this->normalizeParticipants($d), 'les participants RaceResult');
+        $eventId=trim((string)$this->s['rr_event_id']);
+        $url=$this->eventBase().'/_'.rawurlencode($eventId).'/api/list/data?'.http_build_query(['fields'=>implode(',',$fields),'format'=>'json']);
+        $data=$this->decode($this->rrGet($url));
+        return $this->normalizeParticipants($data);
     }
     private function normalizeParticipants(array $data): array {
         $rows = $data['data'] ?? $data['rows'] ?? $data['participants'] ?? $data;
@@ -111,7 +113,8 @@ class RaceResultClient {
         return $out;
     }
     public function saveFields(string $rrId, array $values): void {
-        $url = $this->url('part/savefields', ['id'=>$rrId,'ID'=>$rrId,'noHistory'=>'1']);
-        Http::postJson($url, $values, $this->headers());
+        $eventId=trim((string)$this->s['rr_event_id']);
+        $url=$this->eventBase().'/_'.rawurlencode($eventId).'/api/part/savefields?'.http_build_query(['id'=>$rrId,'ID'=>$rrId,'noHistory'=>'1']);
+        $this->rrPostJson($url, $values);
     }
 }
