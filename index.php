@@ -33,7 +33,7 @@
 
     .box {
       text-align: center;
-      padding: 30px 20px;
+      padding: 20px 20px;
       font-size: 1.3rem;
       font-weight: 600;
       border-radius: 20px;
