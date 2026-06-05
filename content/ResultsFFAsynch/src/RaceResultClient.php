@@ -33,13 +33,25 @@ final class RaceResultClient
         if (!$apiKey) {
             throw new RuntimeException('API Key RaceResult manquante.');
         }
-        // Selon les comptes RR, la clé peut être passée en Authorization ou dans le body.
-        $res = $this->http->post($this->config['rr_login_url'], '', [
-            'Content-Type' => 'application/x-www-form-urlencoded',
-            'Authorization' => 'Bearer ' . $apiKey,
-        ]);
-        if ($res['status'] < 200 || $res['status'] >= 300) {
-            throw new RuntimeException('Login RR impossible HTTP ' . $res['status'] . ' : ' . mb_substr($res['body'], 0, 300));
+        // L'endpoint /api/public/login attend la clé dans le body x-www-form-urlencoded.
+        // Si on envoie seulement Authorization: Bearer, RR répond :
+        // {"error":"no user, apikey or rruser_token given"}
+        $loginAttempts = [
+            http_build_query(['apikey' => $apiKey]),
+            http_build_query(['rruser_token' => $apiKey]),
+        ];
+
+        $res = null;
+        foreach ($loginAttempts as $body) {
+            $res = $this->http->post($this->config['rr_login_url'], $body, [
+                'Content-Type' => 'application/x-www-form-urlencoded',
+            ]);
+            if ($res['status'] >= 200 && $res['status'] < 300) {
+                break;
+            }
+        }
+        if (!$res || $res['status'] < 200 || $res['status'] >= 300) {
+            throw new RuntimeException('Login RR impossible HTTP ' . ($res['status'] ?? 0) . ' : ' . mb_substr($res['body'] ?? '', 0, 300));
         }
         $body = trim($res['body']);
         $json = json_decode($body, true);
