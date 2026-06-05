@@ -21,25 +21,27 @@ class RaceResultClient {
     }
     private function login(): string {
         $url=$this->publicBase().'/login';
-        $attempts=[
-            fn()=>Http::postForm($url, ['apiKey'=>$this->s['rr_api_key']], ['Accept: application/json']),
-            fn()=>Http::postRaw($url, '', ['Accept: application/json','Authorization: Bearer '.$this->s['rr_api_key'],'Content-Type: application/x-www-form-urlencoded']),
-            fn()=>Http::postRaw($url, '', ['Accept: application/json','X-API-Key: '.$this->s['rr_api_key'],'Content-Type: application/x-www-form-urlencoded']),
-            fn()=>Http::postRaw($url.'?apiKey='.rawurlencode($this->s['rr_api_key']), '', ['Accept: application/json','Content-Type: application/x-www-form-urlencoded']),
-        ];
-        $last='';
-        foreach($attempts as $try){
-            try{
-                $data=$this->decode($try());
-                $token=$data['token']??$data['Token']??$data['access_token']??$data['AccessToken']??(is_string($data[0]??null)?$data[0]:null);
-                if(!$token) throw new RuntimeException('Token introuvable dans la réponse login: '.json_encode($data, JSON_UNESCAPED_UNICODE));
-                $ttl=(int)($data['expires_in']??$data['ExpiresIn']??3600);
-                $this->s['rr_token']=$token; $this->s['rr_token_expires_at']=time()+max(300,$ttl);
-                $saved=Settings::load(); $saved['rr_api_key']=$this->s['rr_api_key']; $saved['rr_token']=$token; $saved['rr_token_expires_at']=$this->s['rr_token_expires_at']; Settings::save($saved);
-                return $token;
-            }catch(Throwable $e){ $last=$e->getMessage(); }
+        // API Web RACE RESULT: POST /api/public/login avec body x-www-form-urlencoded
+        // Le paramètre attendu est "apikey" en minuscules. La réponse est le sessionID brut,
+        // à réutiliser ensuite comme Authorization: Bearer <sessionID>.
+        $raw = Http::postRaw(
+            $url,
+            http_build_query(['apikey' => $this->s['rr_api_key']]),
+            ['Accept: text/plain, application/json', 'Content-Type: application/x-www-form-urlencoded']
+        );
+        $token = trim($raw, " \t\r\n\"");
+        if ($token === '') {
+            throw new RuntimeException('Token/session RaceResult vide après login.');
         }
-        throw new RuntimeException('Login RaceResult impossible. Dernière erreur: '.$last);
+        // Par sécurité on renouvelle périodiquement. Si le serveur invalide avant, rrGet/rrPost relance un login.
+        $this->s['rr_token']=$token;
+        $this->s['rr_token_expires_at']=time()+3300;
+        $saved=Settings::load();
+        $saved['rr_api_key']=$this->s['rr_api_key'];
+        $saved['rr_token']=$token;
+        $saved['rr_token_expires_at']=$this->s['rr_token_expires_at'];
+        Settings::save($saved);
+        return $token;
     }
     private function rrGet(string $url): string {
         try { return Http::get($url, $this->tokenHeaders()); }
