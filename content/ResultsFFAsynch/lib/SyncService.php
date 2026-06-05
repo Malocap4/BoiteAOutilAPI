@@ -1,7 +1,7 @@
 <?php
 class SyncService {
     private array $s; private RaceResultClient $rr; private FfaClient $ffa;
-    public function __construct(array $settings){ $this->s=$settings; foreach(['udf_license','udf_ffa_id','udf_results'] as $k) if(empty($settings[$k])) throw new RuntimeException("Champ $k manquant."); $this->rr=new RaceResultClient($settings); $this->ffa=new FfaClient((int)$settings['ffa_season']); }
+    public function __construct(array $settings){ $this->s=$settings; foreach(['udf_license','udf_ffa_id','udf_results'] as $k) if(empty($settings[$k])) throw new RuntimeException("Champ $k manquant."); $this->rr=new RaceResultClient($settings); $this->ffa=new FfaClient($settings['ffa_seasons'] ?? [$settings['ffa_season'] ?? date('Y')]); }
     public function run(): array {
         $participants = Store::read('participants.json', []); if(!$participants) $participants=$this->rr->loadParticipants();
         $queue = Store::read('retry_queue.json', []); $queueBy=[]; foreach($queue as $q) $queueBy[$q['rr_id']]=$q;

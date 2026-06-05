@@ -1,11 +1,20 @@
 <?php
 class FfaClient {
-    private int $season;
-    public function __construct(int $season){ $this->season=$season; }
+    private array $seasons;
+    public function __construct($seasons){
+        if (!is_array($seasons)) $seasons = [$seasons];
+        $this->seasons = array_values(array_unique(array_filter(array_map('intval', $seasons))));
+        if (!$this->seasons) $this->seasons = [(int)date('Y')];
+    }
     public function findAthlete(array $p): ?array {
-        $q = ['frmpostback'=>'true','frmbase'=>'resultats','frmmode'=>'1','frmespace'=>'0','frmsaison'=>$this->season,'frmclub'=>'','frmlicence'=>'','frmnom'=>$p['lastname'],'frmprenom'=>$p['firstname'],'frmsexe'=>'','frmdepartement'=>'','frmligue'=>'','frmcomprch'=>''];
-        $html = Http::get('https://www.athle.fr/bases/liste.aspx?'.http_build_query($q), ['Accept-Language: fr-FR,fr;q=0.9']);
-        return $this->parseAthleteSearch($html, $p);
+        foreach ($this->seasons as $season) {
+            $q = ['frmpostback'=>'true','frmbase'=>'resultats','frmmode'=>'1','frmespace'=>'0','frmsaison'=>$season,'frmclub'=>'','frmlicence'=>'','frmnom'=>$p['lastname'],'frmprenom'=>$p['firstname'],'frmsexe'=>'','frmdepartement'=>'','frmligue'=>'','frmcomprch'=>''];
+            $html = Http::get('https://www.athle.fr/bases/liste.aspx?'.http_build_query($q), ['Accept-Language: fr-FR,fr;q=0.9']);
+            $found = $this->parseAthleteSearch($html, $p);
+            if ($found) { $found['season'] = $season; return $found; }
+            usleep(120000);
+        }
+        return null;
     }
     private function parseAthleteSearch(string $html, array $p): ?array {
         libxml_use_internal_errors(true); $dom=new DOMDocument(); $dom->loadHTML('<?xml encoding="utf-8"?>'.$html); $xp=new DOMXPath($dom);

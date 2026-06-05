@@ -18,6 +18,31 @@ class RaceResultClient {
         if(!is_array($data)) throw new RuntimeException('Réponse JSON RaceResult invalide: '.substr($raw,0,800));
         return $data;
     }
+    private function decodeXmlList(string $raw): array {
+        libxml_use_internal_errors(true);
+        $xml = simplexml_load_string($raw);
+        if ($xml === false) throw new RuntimeException('Réponse RaceResult ni JSON ni XML exploitable: '.substr($raw,0,800));
+        $rows=[];
+        foreach ($xml->record as $rec) {
+            $row=[];
+            foreach ($rec->children() as $k=>$v) $row[$k]=trim((string)$v);
+            if($row) $rows[]=$row;
+        }
+        // Tolérance pour d'autres enveloppes XML éventuelles.
+        if (!$rows) {
+            foreach ($xml->xpath('//record') ?: [] as $rec) {
+                $row=[];
+                foreach ($rec->children() as $k=>$v) $row[$k]=trim((string)$v);
+                if($row) $rows[]=$row;
+            }
+        }
+        return $rows;
+    }
+    private function decodeJsonOrXmlList(string $raw): array {
+        $trim=ltrim($raw);
+        if ($trim !== '' && $trim[0] === '<') return $this->decodeXmlList($raw);
+        return $this->decode($raw);
+    }
     private function tokenHeaders(): array { return ['Accept: application/json, text/plain, */*','Authorization: Bearer '.$this->getToken()]; }
 
     public function getToken(bool $force=false): string {
@@ -145,8 +170,10 @@ class RaceResultClient {
     public function loadParticipants(): array {
         $fields = ['ID','Firstname','Lastname','DateOfBirth'];
         $eventId=trim((string)$this->s['rr_event_id']);
-        $url=$this->hostBase().'/_'.rawurlencode($eventId).'/api/data/list?'.http_build_query(['fields'=>implode(',',$fields),'format'=>'json']);
-        $data=$this->decode($this->rrGet($url));
+        // RaceResult peut renvoyer la liste en XML même si un format JSON est demandé
+        // selon la configuration/export côté évènement. On parse donc les deux formats.
+        $url=$this->hostBase().'/_'.rawurlencode($eventId).'/api/data/list?'.http_build_query(['fields'=>implode(',',$fields)]);
+        $data=$this->decodeJsonOrXmlList($this->rrGet($url));
         return $this->normalizeParticipants($data);
     }
     private function normalizeParticipants(array $data): array {

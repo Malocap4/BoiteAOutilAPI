@@ -40,3 +40,10 @@ Le matching FFA utilise `Firstname`, `Lastname`, `DateOfBirth` côté RaceResult
 {Date}
 Place : {classement} / Temps : {Temps}
 ```
+
+
+## V6
+- Lecture participants RaceResult compatible JSON ou XML (`<list><record>...</record></list>`).
+- Les champs techniques `API public RR` et `Base événements RR` ne sont plus affichés sur le front.
+- Sélection multi-saisons FFA.
+- Les listes UDF affichent uniquement le nom du champ RaceResult.
