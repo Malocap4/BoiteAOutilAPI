@@ -43,6 +43,7 @@
       transition: transform 0.2s, box-shadow 0.2s;
       backdrop-filter: blur(2px);
       background-color: #ffffff;
+      color: #000000;
     }
 
     .box:hover {
