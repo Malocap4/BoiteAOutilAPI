@@ -82,10 +82,10 @@ function launchExe(path) {
 
   <h1>La Boite à Outil API</h1>
   <div class="container">
-    <a href="./content/ResultsFFA/index.php" class="box blue">Profil de Dénivelé</a>
+    <a href="./content/ResultsFFA/index.php" class="box blue">Résultats FFA</a>
   </div>
   <div class="container">
-    <a href="./content/ResultsFFAsynch/index.php" class="box blue">Profil de Dénivelé</a>
+    <a href="./content/ResultsFFAsynch/index.php" class="box blue">Résultats FFA Synch</a>
   </div>
 </body>
 
