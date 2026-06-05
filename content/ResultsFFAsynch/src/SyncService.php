@@ -20,7 +20,7 @@ final class SyncService
         return $norm($p['Lastname'] ?? '') . '|' . $norm($p['Firstname'] ?? '') . '|' . strtolower(trim((string)($p['Sex'] ?? ''))) . '|' . trim((string)($p['DateofBirth'] ?? ''));
     }
 
-    public function run(?int $limit = null): array
+    public function run(): array
     {
         $eventId = $this->db->getSetting('selected_event_id');
         if (!$eventId) {
@@ -34,38 +34,87 @@ final class SyncService
         }
 
         $participants = $this->rr->participants($eventId);
-        $limit = $limit ?? (int)$this->config['max_participants_per_run'];
         $processed = 0;
+        $ready = 0;
         $pushed = 0;
         $errors = 0;
+        $skipped = 0;
+        $pendingRows = [];
+        $pendingKeys = [];
+        $pendingBibs = [];
+        $batchSize = max(1, (int)($this->config['rr_save_batch_size'] ?? 2));
 
         foreach ($participants as $p) {
-            if ($processed >= $limit) break;
             $bib = (string)($p['Bib'] ?? '');
-            if (!$bib || !trim((string)$p['Lastname']) || !trim((string)$p['Firstname'])) {
+            if (!$bib || !trim((string)($p['Lastname'] ?? '')) || !trim((string)($p['Firstname'] ?? ''))) {
+                $skipped++;
                 continue;
             }
             $processed++;
+
             try {
                 $cache = $this->getOrFetchCache($p);
                 if (!$cache || empty($cache['runner_id'])) {
+                    $skipped++;
                     $this->db->log($eventId, $bib, 'skip', 'Runner FFA introuvable');
                     continue;
                 }
+
                 $row = ['Bib' => $bib];
                 $row[$mapRunnerId] = $cache['runner_id'] ?? '';
                 $row[$mapLicence] = $cache['licence'] ?? '';
                 $row[$mapPalmares] = $cache['palmares'] ?? '';
-                $this->rr->saveFields($eventId, [$row]);
-                $this->markPushed(self::cacheKey($p));
-                $pushed++;
-                $this->db->log($eventId, $bib, 'ok', 'Infos FFA poussées');
+
+                $pendingRows[] = $row;
+                $pendingKeys[] = self::cacheKey($p);
+                $pendingBibs[] = $bib;
+                $ready++;
+
+                if (count($pendingRows) >= $batchSize) {
+                    $this->flushRows($eventId, $pendingRows, $pendingKeys, $pendingBibs, $pushed, $errors);
+                }
             } catch (Throwable $e) {
                 $errors++;
                 $this->db->log($eventId, $bib, 'error', $e->getMessage());
             }
         }
-        return ['processed' => $processed, 'pushed' => $pushed, 'errors' => $errors, 'total_rr' => count($participants)];
+
+        $this->flushRows($eventId, $pendingRows, $pendingKeys, $pendingBibs, $pushed, $errors);
+
+        return [
+            'processed' => $processed,
+            'ready_to_push' => $ready,
+            'pushed' => $pushed,
+            'skipped' => $skipped,
+            'errors' => $errors,
+            'total_rr' => count($participants),
+            'rr_save_batch_size' => $batchSize,
+        ];
+    }
+
+    private function flushRows(string $eventId, array &$rows, array &$keys, array &$bibs, int &$pushed, int &$errors): void
+    {
+        if (!$rows) return;
+        try {
+            // Envoi RaceResult groupé par petits lots : par défaut 2 participants par requête.
+            $this->rr->saveFields($eventId, $rows);
+            foreach ($keys as $key) {
+                $this->markPushed($key);
+            }
+            foreach ($bibs as $bib) {
+                $this->db->log($eventId, (string)$bib, 'ok', 'Infos FFA poussées');
+            }
+            $pushed += count($rows);
+        } catch (Throwable $e) {
+            $errors += count($rows);
+            foreach ($bibs as $bib) {
+                $this->db->log($eventId, (string)$bib, 'error', $e->getMessage());
+            }
+        } finally {
+            $rows = [];
+            $keys = [];
+            $bibs = [];
+        }
     }
 
     private function getOrFetchCache(array $p): ?array

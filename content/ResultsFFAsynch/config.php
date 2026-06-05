@@ -19,8 +19,9 @@ return [
     // 500000 = 0,5 seconde entre deux coureurs non présents en cache.
     'ffa_delay_us' => 500000,
 
-    // Nombre max de coureurs traités par exécution cron.
-    'max_participants_per_run' => 50,
+    // Nombre de participants envoyés par requête RaceResult savefields.
+    // 2 = envoi deux participants par deux participants.
+    'rr_save_batch_size' => 2,
 
     // Nombre max de résultats FFA à stocker dans le palmarès.
     'max_palmares_results' => 8,

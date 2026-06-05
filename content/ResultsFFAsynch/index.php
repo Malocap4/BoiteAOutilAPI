@@ -41,7 +41,7 @@ try {
             $db->clearCache();
             $msg = 'Cache FFA vidé.';
         } elseif ($action === 'run_once') {
-            $res = $sync->run((int)post('limit', $config['max_participants_per_run']));
+            $res = $sync->run();
             $msg = 'Synchro exécutée : ' . json_encode($res, JSON_UNESCAPED_UNICODE);
         }
     }
@@ -137,11 +137,10 @@ body{font-family:Arial, sans-serif;margin:24px;background:#f7f7f8;color:#202124}
 <h2>5. Exécution</h2>
 <form method="post" class="row">
 <input type="hidden" name="action" value="run_once">
-<div><label>Limite coureurs</label><input type="text" name="limit" value="<?=h($config['max_participants_per_run'])?>"></div>
 <button>Lancer une synchro maintenant</button>
 </form>
 <form method="post" style="margin-top:10px"><input type="hidden" name="action" value="reset_cache"><button class="danger" onclick="return confirm('Vider tout le cache FFA ?')">RAZ cache FFA</button></form>
-<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
+<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s). Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
 </div>
 
 <div class="card">

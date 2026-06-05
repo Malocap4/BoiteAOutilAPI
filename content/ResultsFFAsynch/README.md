@@ -35,7 +35,7 @@ Modifier `config.php` :
 ```php
 'admin_password' => 'change-me',
 'ffa_delay_us' => 500000,
-'max_participants_per_run' => 50,
+'rr_save_batch_size' => 2,
 ```
 
 ## Cron
@@ -46,10 +46,10 @@ Exemple toutes les 5 minutes :
 */5 * * * * /usr/bin/php /chemin/ffa-rr-sync/cron_sync.php >> /chemin/ffa-rr-sync/data/cron.log 2>&1
 ```
 
-Possibilité de limiter le nombre de coureurs par run :
+Il n'y a plus de limite de coureurs par exécution : tous les participants de l'événement sélectionné sont parcourus. Les envois vers RaceResult sont groupés par lots configurables, par défaut deux participants par deux participants :
 
-```bash
-php cron_sync.php 20
+```php
+'rr_save_batch_size' => 2,
 ```
 
 ## Point important FFA
