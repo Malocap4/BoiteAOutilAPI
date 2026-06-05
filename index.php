@@ -28,7 +28,7 @@
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 25px;
       max-width: 1000px;
-      margin: 0 auto;
+      margin: 30 auto;
     }
 
     .box {
@@ -42,21 +42,13 @@
       box-shadow: 0 6px 15px rgba(0, 0, 0, 0.2);
       transition: transform 0.2s, box-shadow 0.2s;
       backdrop-filter: blur(2px);
+      background-color: #ffffff;
     }
 
     .box:hover {
       transform: translateY(-5px);
       box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
     }
-
-    .green {
-      background-color: #4b8cd1;
-    }
-
-    .gray {
-      background-color: #757575;
-    }
-
     @media (max-width: 500px) {
       h1 {
         font-size: 1.8rem;
@@ -82,10 +74,10 @@ function launchExe(path) {
 
   <h1>La Boite à Outil API</h1>
   <div class="container">
-    <a href="./content/ResultsFFA/index.php" class="box blue">Résultats FFA</a>
+    <a href="./content/ResultsFFA/index.php" class="box">Résultats FFA</a>
   </div>
   <div class="container">
-    <a href="./content/ResultsFFAsynch/index.php" class="box blue">Résultats FFA Synch</a>
+    <a href="./content/ResultsFFAsynch/index.php" class="box">Résultats FFA Synch</a>
   </div>
 </body>
 
