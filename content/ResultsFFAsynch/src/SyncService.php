@@ -165,6 +165,8 @@ final class SyncService
 
         $this->flushRows($eventId, $pendingRows, $pendingKeys, $pendingBibs, $pushed, $errors);
 
+        $allDone = ($inspected >= $total && $ffaFetched === 0 && $errors === 0);
+
         return [
             'processed_this_run' => $processed,
             'inspected_this_run' => $inspected,
@@ -189,6 +191,7 @@ final class SyncService
             'errors' => $errors,
             'rr_save_batch_size' => $batchSize,
             'max_run_seconds' => $maxRuntime,
+            'all_done' => $allDone,
         ];
     }
 

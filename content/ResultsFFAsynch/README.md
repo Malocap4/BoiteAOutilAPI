@@ -99,3 +99,26 @@ Signification :
 ## Point d'attention FFA
 
 Le parsing FFA est volontairement fait par recherche de libellés / appellations et non par position fixe, car les colonnes et blocs HTML peuvent varier selon les pages athle.fr.
+
+
+## Synchro automatique depuis l'interface
+
+Le bouton **Lancer la synchro automatique** ne lance pas une seule grosse requête PHP.
+Il enchaîne des petites exécutions AJAX vers `api_sync.php` :
+
+- 2 nouveaux participants maximum interrogés côté FFA par passage ;
+- push RaceResult régulier dès que des infos sont disponibles ;
+- arrêt automatique quand toute la liste RaceResult a été parcourue et que tout est en cache / poussé ;
+- bouton **Arrêter** disponible à tout moment.
+
+Le délai entre deux passages se règle dans `config.php` :
+
+```php
+'auto_sync_delay_ms' => 1500,
+```
+
+Pour une exécution totalement autonome même navigateur fermé, utiliser plutôt un cron serveur toutes les 1 ou 2 minutes :
+
+```bash
+* * * * * php /chemin/ffa-rr-sync/cron_sync.php >> /chemin/ffa-rr-sync/data/cron.log 2>&1
+```

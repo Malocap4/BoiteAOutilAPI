@@ -30,6 +30,10 @@ return [
     // 2 = envoi deux participants par deux participants.
     'rr_save_batch_size' => 2,
 
+    // Délai entre deux passages automatiques déclenchés depuis l'interface web.
+    // Chaque passage reste court : 2 nouveaux coureurs FFA, puis retour au navigateur.
+    'auto_sync_delay_ms' => 1500,
+
     // Nombre max de résultats FFA à stocker dans le palmarès.
     'max_palmares_results' => 8,
 

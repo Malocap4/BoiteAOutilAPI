@@ -150,8 +150,14 @@ body{font-family:Arial, sans-serif;margin:24px;background:#f7f7f8;color:#202124}
 <input type="hidden" name="action" value="run_once">
 <button>Lancer une synchro maintenant</button>
 </form>
+<div class="row" style="margin-top:12px">
+<button type="button" id="autoStart">Lancer la synchro automatique</button>
+<button type="button" id="autoStop" class="danger" disabled>Arrêter</button>
+<span id="autoStatus" class="small">Arrêtée.</span>
+</div>
+<pre id="autoLog" style="display:none;background:#111;color:#eee;padding:10px;border-radius:8px;max-height:260px;overflow:auto;font-size:12px"></pre>
 <form method="post" style="margin-top:10px"><input type="hidden" name="action" value="reset_cache"><button class="danger" onclick="return confirm('Vider tout le cache FFA ?')">RAZ cache FFA</button></form>
-<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s), dont <b><?=$cacheFoundCount?></b> trouvé(s) et <b><?=$cacheNotFoundCount?></b> introuvable(s) FFA. Curseur événement : <b><?=h($cursorInfo)?></b>. FFA : <b><?=h($config['ffa_fetch_batch_size'] ?? 2)?></b> nouveau(x) coureur(s) max par exécution. Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
+<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s), dont <b><?=$cacheFoundCount?></b> trouvé(s) et <b><?=$cacheNotFoundCount?></b> introuvable(s) FFA. Curseur événement : <b><?=h($cursorInfo)?></b>. FFA : <b><?=h($config['ffa_fetch_batch_size'] ?? 2)?></b> nouveau(x) coureur(s) max par exécution. Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). La synchro automatique relance une exécution toutes les <b><?=h($config['auto_sync_delay_ms'] ?? 1500)?></b> ms et s'arrête quand tout le monde a été requêté. Cron conseillé côté serveur : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
 </div>
 
 <div class="card">
@@ -160,4 +166,68 @@ body{font-family:Arial, sans-serif;margin:24px;background:#f7f7f8;color:#202124}
 <?php foreach ($logs as $l): ?><tr><td><?=h($l['created_at'])?></td><td><?=h($l['bib'])?></td><td><?=h($l['status'])?></td><td><?=h($l['message'])?></td></tr><?php endforeach; ?>
 </table>
 </div>
-</div></body></html>
+</div>
+<script>
+(function(){
+  const startBtn = document.getElementById('autoStart');
+  const stopBtn = document.getElementById('autoStop');
+  const statusEl = document.getElementById('autoStatus');
+  const logEl = document.getElementById('autoLog');
+  let running = false;
+  let loops = 0;
+  const delayMs = <?=json_encode((int)($config['auto_sync_delay_ms'] ?? 1500))?>;
+
+  function log(line) {
+    logEl.style.display = 'block';
+    logEl.textContent = '[' + new Date().toLocaleTimeString() + '] ' + line + "\n" + logEl.textContent;
+  }
+
+  async function tick() {
+    if (!running) return;
+    loops++;
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+    statusEl.textContent = 'Synchro en cours… passage #' + loops;
+
+    try {
+      const r = await fetch('api_sync.php', {method:'POST', cache:'no-store'});
+      const data = await r.json();
+      if (!data.ok) throw new Error(data.error || 'Erreur inconnue');
+      const res = data.result || {};
+      log(JSON.stringify(res));
+
+      if (res.all_done) {
+        running = false;
+        statusEl.textContent = 'Terminé : tous les participants ont été requêtés / traités.';
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+        return;
+      }
+    } catch (e) {
+      running = false;
+      statusEl.textContent = 'Erreur : ' + e.message;
+      log('ERREUR ' + e.message);
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      return;
+    }
+
+    if (running) setTimeout(tick, delayMs);
+  }
+
+  startBtn.addEventListener('click', function(){
+    if (running) return;
+    running = true;
+    loops = 0;
+    log('Démarrage synchro automatique');
+    tick();
+  });
+  stopBtn.addEventListener('click', function(){
+    running = false;
+    statusEl.textContent = 'Arrêt demandé.';
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  });
+})();
+</script>
+</body></html>
