@@ -141,38 +141,139 @@ final class FfaClient
         $dom = $this->dom($html);
         $xp = new DOMXPath($dom);
         $results = [];
-        foreach ($xp->query('//table[.//tr]') as $table) {
-            $headers = $this->headersForTable($table);
-            if (!$headers) continue;
-            $map = $this->buildHeaderMap($headers);
-            // On ne considère une table comme résultat que si elle contient des libellés compatibles.
-            $score = 0;
-            foreach (['date', 'epreuve', 'event', 'place', 'temps', 'time', 'distance', 'type', 'cat', 'categorie'] as $needle) {
-                if (array_key_exists($needle, $map)) $score++;
+        $defaultYear = $this->detectResultsYear($html);
+
+        // La page FFA peut répéter plusieurs blocs de résultats et ajouter des lignes "detail-row" mobile.
+        // On lit uniquement les lignes de données qui suivent une ligne d'en-têtes et on mappe par libellé,
+        // jamais par position fixe globale.
+        foreach ($xp->query('//tr') as $tr) {
+            if (!$tr instanceof DOMElement) continue;
+            $class = ' ' . $tr->getAttribute('class') . ' ';
+            if (str_contains($class, ' detail-row ')) continue;
+            if ($xp->query('./th', $tr)->length > 0) continue;
+            if ($xp->query('./td', $tr)->length === 0) continue;
+
+            $headerMap = $this->nearestPreviousHeaderMap($xp, $tr);
+            if (!$this->looksLikeResultsHeaderMap($headerMap)) continue;
+
+            $cells = $this->rowCells($tr);
+            $row = $this->mapRowByHeaders($cells, $headerMap);
+
+            $event = $this->pick($row, ['epreuve', 'competition', 'meeting', 'event', 'libelle', 'nom epreuve']);
+            $resultRaw = $this->pick($row, ['resultat', 'résultat', 'temps', 'chrono', 'performance', 'perf', 'time']);
+            $dateRaw = $this->pick($row, ['date', 'jour']);
+            $location = $this->pick($row, ['ville', 'lieu', 'location', 'city']);
+            $infos = $this->pick($row, ['infos', 'info']);
+
+            // Ignore les lignes décoratives ou incomplètes : elles sont la cause des faux blocs
+            // "Tour / Niveau / Ville" observés dans le palmarès.
+            if ($event === '' && $resultRaw === '' && $dateRaw === '' && $location === '') {
+                continue;
             }
-            if ($score < 2) continue;
-            foreach ($xp->query('.//tr[td]', $table) as $tr) {
-                $cells = $this->rowCells($tr);
-                if (count($cells) < 2) continue;
-                $row = $this->mapRowByHeaders($cells, $map);
-                $result = [
-                    'event' => $this->pick($row, ['epreuve', 'competition', 'meeting', 'event', 'nom', 'libelle']),
-                    'distance' => $this->pick($row, ['distance', 'dist']),
-                    'type' => $this->pick($row, ['type', 'discipline', 'nature']),
-                    'date' => $this->pick($row, ['date', 'jour']),
-                    'place' => $this->pick($row, ['place', 'clt', 'classement', 'rang', 'rank']),
-                    'sex_place' => $this->pick($row, ['place sexe', 'clt sexe', 'classement sexe', 'rang sexe']),
-                    'cat_place' => $this->pick($row, ['place cat', 'clt cat', 'classement cat', 'place categorie', 'clt categorie']),
-                    'sex' => $this->pick($row, ['sexe', 'sex']),
-                    'category' => $this->pick($row, ['cat', 'categorie', 'category']),
-                    'time' => $this->pick($row, ['temps', 'chrono', 'performance', 'perf', 'time']),
-                ];
-                if ($result['event'] || $result['time'] || $result['place']) {
-                    $results[] = $result;
-                }
+            if ($event === '' && $resultRaw === '') {
+                continue;
             }
+
+            [$place, $time] = $this->splitFfaResult($resultRaw);
+            if ($place === '') {
+                $place = $this->pick($row, ['place', 'clt', 'classement', 'rang', 'rank']);
+            }
+            if ($time === '') {
+                $time = $this->pick($row, ['temps', 'chrono', 'performance', 'perf', 'time']);
+            }
+
+            [$category, $sex] = $this->parseInfosCategorySex($infos);
+
+            $results[] = [
+                'event' => $event,
+                'location' => $location,
+                'date' => $this->formatFfaDate($dateRaw, $defaultYear),
+                'place' => $place,
+                'sex_place' => $this->pick($row, ['place sexe', 'clt sexe', 'classement sexe', 'rang sexe']),
+                'cat_place' => $this->pick($row, ['place cat', 'clt cat', 'classement cat', 'place categorie', 'clt categorie']),
+                'sex' => $this->pick($row, ['sexe', 'sex']) ?: $sex,
+                'category' => $this->pick($row, ['cat', 'categorie', 'category']) ?: $category,
+                'time' => $time,
+            ];
         }
         return $results;
+    }
+
+    private function nearestPreviousHeaderMap(DOMXPath $xp, DOMElement $tr): array
+    {
+        // Cherche la ligne d'en-tête précédente dans le même tbody/table. C'est plus fiable que
+        // "première ligne th de la table", car athle.fr répète les en-têtes dans la même table.
+        $prev = $tr->previousSibling;
+        while ($prev) {
+            if ($prev instanceof DOMElement && strtolower($prev->tagName) === 'tr') {
+                if ($xp->query('./th', $prev)->length > 0) {
+                    return $this->buildHeaderMap($this->rowCells($prev, true));
+                }
+            }
+            $prev = $prev->previousSibling;
+        }
+        return [];
+    }
+
+    private function looksLikeResultsHeaderMap(array $map): bool
+    {
+        return isset($map['epreuve'], $map['resultat'])
+            || isset($map['epreuve'], $map['temps'])
+            || isset($map['event'], $map['resultat']);
+    }
+
+    private function splitFfaResult(string $raw): array
+    {
+        $raw = trim(html_entity_decode($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $raw = str_replace("\xC2\xA0", ' ', $raw);
+        $raw = trim(preg_replace('/\s+/u', ' ', strip_tags($raw)));
+        if ($raw === '' || $raw === '-') return ['', ''];
+
+        // Exemples FFA : "2. 16h34'44''", "211. 3h44'57''", "18. 7h59'58''".
+        if (preg_match('/^([0-9]+)\s*[\.\)\-:]\s*(.+)$/u', $raw, $m)) {
+            return [trim($m[1]), trim($m[2])];
+        }
+        return ['', $raw];
+    }
+
+    private function parseInfosCategorySex(string $infos): array
+    {
+        $infos = strtoupper(trim($infos));
+        if ($infos === '' || $infos === '-') return ['', ''];
+        // Exemple : SEM/91, M0M/91. On garde la catégorie lisible (SE, M0...),
+        // et le sexe final M/F si présent. On ne l'affiche que si un classement sexe/catégorie existe.
+        $main = preg_split('/[\/\s]+/', $infos)[0] ?? '';
+        if (preg_match('/^([A-Z]+\d*)([MF])$/u', $main, $m)) {
+            return [$m[1], $m[2]];
+        }
+        return [$main, ''];
+    }
+
+    private function detectResultsYear(string $html): string
+    {
+        $text = $this->visibleText($html);
+        if (preg_match('/Année\s*:\s*(20\d{2})/iu', $text, $m)) {
+            return $m[1];
+        }
+        if (preg_match('/Saison\s*:\s*(20\d{2})/iu', $text, $m)) {
+            return $m[1];
+        }
+        return date('Y');
+    }
+
+    private function formatFfaDate(string $date, string $year = ''): string
+    {
+        $date = trim(html_entity_decode($date, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($date === '' || $date === '-') return '';
+        if (preg_match('/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/', $date, $m)) {
+            $d = (int)$m[1];
+            $mo = (int)$m[2];
+            $y = $m[3] ?? $year;
+            if (strlen($y) === 2) $y = '20' . $y;
+            $months = [1=>'Janvier',2=>'Février',3=>'Mars',4=>'Avril',5=>'Mai',6=>'Juin',7=>'Juillet',8=>'Août',9=>'Septembre',10=>'Octobre',11=>'Novembre',12=>'Décembre'];
+            return $d . ' ' . ($months[$mo] ?? $mo) . ($y ? ' ' . $y : '');
+        }
+        return $date;
     }
 
     private function headersForTable(DOMElement $table): array

@@ -122,3 +122,17 @@ Pour une exécution totalement autonome même navigateur fermé, utiliser plutô
 ```bash
 * * * * * php /chemin/ffa-rr-sync/cron_sync.php >> /chemin/ffa-rr-sync/data/cron.log 2>&1
 ```
+
+## v7 - Correction format palmarès FFA
+
+Le parsing FFA des résultats lit désormais les colonnes par leurs libellés (`Epreuve`, `Résultat`, `Date`, `Ville`, `Infos`) et ignore les lignes mobiles `detail-row` qui provoquaient les faux blocs `Tour`, `Niveau`, `Lieu`, etc.
+
+Format généré :
+
+```text
+{Epreuve} ({Ville})
+{Date}
+{icone} Place : {classement général} ({classement sexe}{sexe} - {classement catégorie}{catégorie}) / Temps : {temps}
+```
+
+Les parenthèses de classement sexe/catégorie ne sont ajoutées que si ces classements existent réellement dans les données FFA. Les participants déjà en cache doivent être recalculés avec le bouton **RAZ cache FFA** si leur palmarès a été généré par une ancienne version.
