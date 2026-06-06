@@ -140,7 +140,7 @@ body{font-family:Arial, sans-serif;margin:24px;background:#f7f7f8;color:#202124}
 <button>Lancer une synchro maintenant</button>
 </form>
 <form method="post" style="margin-top:10px"><input type="hidden" name="action" value="reset_cache"><button class="danger" onclick="return confirm('Vider tout le cache FFA ?')">RAZ cache FFA</button></form>
-<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s). Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
+<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s). FFA : <b><?=h($config['ffa_fetch_batch_size'] ?? 2)?></b> nouveau(x) coureur(s) max par exécution. Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
 </div>
 
 <div class="card">

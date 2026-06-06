@@ -19,6 +19,13 @@ return [
     // 500000 = 0,5 seconde entre deux coureurs non présents en cache.
     'ffa_delay_us' => 500000,
 
+    // Nombre maximum de nouveaux coureurs interrogés sur athle.fr par exécution.
+    // 2 = micro-lots de deux participants pour éviter les timeouts / 502.
+    'ffa_fetch_batch_size' => 2,
+
+    // Durée max d'une exécution web/cron avant de reporter au prochain passage.
+    'max_run_seconds' => 25,
+
     // Nombre de participants envoyés par requête RaceResult savefields.
     // 2 = envoi deux participants par deux participants.
     'rr_save_batch_size' => 2,

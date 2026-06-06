@@ -20,6 +20,13 @@ final class SyncService
         return $norm($p['Lastname'] ?? '') . '|' . $norm($p['Firstname'] ?? '') . '|' . strtolower(trim((string)($p['Sex'] ?? ''))) . '|' . trim((string)($p['DateofBirth'] ?? ''));
     }
 
+    /**
+     * Exécution volontairement incrémentale pour éviter les 502/timeouts HTTP :
+     * - on parcourt tous les participants RR ;
+     * - on pousse vers RR toutes les données déjà prêtes en cache ;
+     * - on limite les nouvelles requêtes FFA à ffa_fetch_batch_size coureurs par exécution ;
+     * - après chaque micro-lot FFA, on pousse immédiatement les nouvelles données vers RR.
+     */
     public function run(): array
     {
         $eventId = $this->db->getSetting('selected_event_id');
@@ -34,43 +41,70 @@ final class SyncService
         }
 
         $participants = $this->rr->participants($eventId);
+        $batchSize = max(1, (int)($this->config['rr_save_batch_size'] ?? 2));
+        $ffaBatchSize = max(1, (int)($this->config['ffa_fetch_batch_size'] ?? 2));
+        $maxRuntime = max(5, (int)($this->config['max_run_seconds'] ?? 25));
+        $startedAt = microtime(true);
+
         $processed = 0;
+        $cacheHits = 0;
+        $ffaFetched = 0;
         $ready = 0;
         $pushed = 0;
         $errors = 0;
         $skipped = 0;
+        $deferred = 0;
+
         $pendingRows = [];
         $pendingKeys = [];
         $pendingBibs = [];
-        $batchSize = max(1, (int)($this->config['rr_save_batch_size'] ?? 2));
 
         foreach ($participants as $p) {
+            if ((microtime(true) - $startedAt) >= $maxRuntime) {
+                $deferred++;
+                continue;
+            }
+
             $bib = (string)($p['Bib'] ?? '');
             if (!$bib || !trim((string)($p['Lastname'] ?? '')) || !trim((string)($p['Firstname'] ?? ''))) {
                 $skipped++;
                 continue;
             }
             $processed++;
+            $key = self::cacheKey($p);
 
             try {
-                $cache = $this->getOrFetchCache($p);
+                $cache = $this->readCache($key);
+
+                if (!$cache) {
+                    if ($ffaFetched >= $ffaBatchSize) {
+                        // On ne surcharge pas athle.fr dans la même exécution : prochain cron/run.
+                        $deferred++;
+                        continue;
+                    }
+                    $cache = $this->fetchAndCache($p, $key);
+                    $ffaFetched++;
+                    // Après chaque récupération FFA, on pousse ce qui est prêt sans attendre la fin.
+                } else {
+                    $cacheHits++;
+                    // Si déjà poussé, inutile de renvoyer à chaque cron.
+                    if (!empty($cache['pushed_at'])) {
+                        continue;
+                    }
+                }
+
                 if (!$cache || empty($cache['runner_id'])) {
                     $skipped++;
                     $this->db->log($eventId, $bib, 'skip', 'Runner FFA introuvable');
                     continue;
                 }
 
-                $row = ['Bib' => $bib];
-                $row[$mapRunnerId] = $cache['runner_id'] ?? '';
-                $row[$mapLicence] = $cache['licence'] ?? '';
-                $row[$mapPalmares] = $cache['palmares'] ?? '';
-
-                $pendingRows[] = $row;
-                $pendingKeys[] = self::cacheKey($p);
+                $pendingRows[] = $this->makeSaveRow($bib, $cache, $mapRunnerId, $mapLicence, $mapPalmares);
+                $pendingKeys[] = $key;
                 $pendingBibs[] = $bib;
                 $ready++;
 
-                if (count($pendingRows) >= $batchSize) {
+                if (count($pendingRows) >= $batchSize || $ffaFetched > 0) {
                     $this->flushRows($eventId, $pendingRows, $pendingKeys, $pendingBibs, $pushed, $errors);
                 }
             } catch (Throwable $e) {
@@ -82,13 +116,28 @@ final class SyncService
         $this->flushRows($eventId, $pendingRows, $pendingKeys, $pendingBibs, $pushed, $errors);
 
         return [
-            'processed' => $processed,
+            'processed_this_run' => $processed,
+            'total_rr' => count($participants),
+            'cache_hits' => $cacheHits,
+            'ffa_fetched_this_run' => $ffaFetched,
+            'ffa_fetch_batch_size' => $ffaBatchSize,
             'ready_to_push' => $ready,
             'pushed' => $pushed,
             'skipped' => $skipped,
+            'deferred_next_run' => $deferred,
             'errors' => $errors,
-            'total_rr' => count($participants),
             'rr_save_batch_size' => $batchSize,
+            'max_run_seconds' => $maxRuntime,
+        ];
+    }
+
+    private function makeSaveRow(string $bib, array $cache, string $mapRunnerId, string $mapLicence, string $mapPalmares): array
+    {
+        return [
+            'Bib' => $bib,
+            $mapRunnerId => $cache['runner_id'] ?? '',
+            $mapLicence => $cache['licence'] ?? '',
+            $mapPalmares => $cache['palmares'] ?? '',
         ];
     }
 
@@ -96,7 +145,6 @@ final class SyncService
     {
         if (!$rows) return;
         try {
-            // Envoi RaceResult groupé par petits lots : par défaut 2 participants par requête.
             $this->rr->saveFields($eventId, $rows);
             foreach ($keys as $key) {
                 $this->markPushed($key);
@@ -117,37 +165,42 @@ final class SyncService
         }
     }
 
-    private function getOrFetchCache(array $p): ?array
+    private function readCache(string $key): ?array
     {
-        $key = self::cacheKey($p);
         $stmt = $this->db->pdo()->prepare('SELECT * FROM runner_cache WHERE cache_key = :k');
         $stmt->execute([':k' => $key]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($row) {
-            return $row;
-        }
+        return $row ?: null;
+    }
+
+    private function fetchAndCache(array $p, string $key): ?array
+    {
         $data = $this->ffa->fetchRunner((string)$p['Lastname'], (string)$p['Firstname'], (string)$p['Sex'], (string)$p['DateofBirth']);
-        usleep((int)$this->config['ffa_delay_us']);
+        usleep((int)($this->config['ffa_delay_us'] ?? 500000));
+
         if (!$data) {
             $this->saveCache($key, $p, '', '', '', []);
             return null;
         }
-        $palmares = PalmaresFormatter::format($data['results'] ?? [], (int)$this->config['max_palmares_results']);
+
+        $palmares = PalmaresFormatter::format($data['results'] ?? [], (int)($this->config['max_palmares_results'] ?? 8));
         $this->saveCache($key, $p, $data['runner_id'] ?? '', $data['licence'] ?? '', $palmares, $data);
+
         return [
             'runner_id' => $data['runner_id'] ?? '',
             'licence' => $data['licence'] ?? '',
             'palmares' => $palmares,
+            'pushed_at' => null,
         ];
     }
 
     private function saveCache(string $key, array $p, string $runnerId, string $licence, string $palmares, array $raw): void
     {
         $stmt = $this->db->pdo()->prepare(<<<SQL
-INSERT INTO runner_cache(cache_key, lastname, firstname, sex, dateofbirth, runner_id, licence, palmares, raw_payload, fetched_at)
-VALUES(:k,:ln,:fn,:sx,:dob,:rid,:lic,:pal,:raw,:f)
+INSERT INTO runner_cache(cache_key, lastname, firstname, sex, dateofbirth, runner_id, licence, palmares, raw_payload, fetched_at, pushed_at)
+VALUES(:k,:ln,:fn,:sx,:dob,:rid,:lic,:pal,:raw,:f,NULL)
 ON CONFLICT(cache_key) DO UPDATE SET
-runner_id=excluded.runner_id, licence=excluded.licence, palmares=excluded.palmares, raw_payload=excluded.raw_payload, fetched_at=excluded.fetched_at
+runner_id=excluded.runner_id, licence=excluded.licence, palmares=excluded.palmares, raw_payload=excluded.raw_payload, fetched_at=excluded.fetched_at, pushed_at=NULL
 SQL);
         $stmt->execute([
             ':k' => $key,
