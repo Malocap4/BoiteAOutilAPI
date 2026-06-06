@@ -29,8 +29,13 @@ try {
             $db->setSetting('date_to', post('date_to'));
             $msg = 'Liste évènements rafraîchie.';
         } elseif ($action === 'select_event') {
-            $db->setSetting('selected_event_id', post('event_id'));
+            $oldEventId = $db->getSetting('selected_event_id', '');
+            $newEventId = post('event_id');
+            $db->setSetting('selected_event_id', $newEventId);
             $db->setSetting('selected_event_label', post('event_label'));
+            if ($newEventId !== $oldEventId) {
+                $db->resetCursor($newEventId);
+            }
             $msg = 'Évènement sélectionné.';
         } elseif ($action === 'save_mapping') {
             $db->setSetting('map_runner_id', post('map_runner_id'));
@@ -66,6 +71,12 @@ try {
 }
 $logs = $db->pdo()->query('SELECT * FROM sync_log ORDER BY id DESC LIMIT 50')->fetchAll(PDO::FETCH_ASSOC);
 $cacheCount = (int)$db->pdo()->query('SELECT COUNT(*) FROM runner_cache')->fetchColumn();
+$cacheFoundCount = (int)$db->pdo()->query("SELECT COUNT(*) FROM runner_cache WHERE COALESCE(runner_id,'') <> ''")->fetchColumn();
+$cacheNotFoundCount = (int)$db->pdo()->query("SELECT COUNT(*) FROM runner_cache WHERE COALESCE(runner_id,'') = ''")->fetchColumn();
+$cursorInfo = '';
+if ($selectedEventId) {
+    $cursorInfo = (string)$db->getCursor($selectedEventId);
+}
 ?>
 <!doctype html>
 <html lang="fr">
@@ -140,7 +151,7 @@ body{font-family:Arial, sans-serif;margin:24px;background:#f7f7f8;color:#202124}
 <button>Lancer une synchro maintenant</button>
 </form>
 <form method="post" style="margin-top:10px"><input type="hidden" name="action" value="reset_cache"><button class="danger" onclick="return confirm('Vider tout le cache FFA ?')">RAZ cache FFA</button></form>
-<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s). FFA : <b><?=h($config['ffa_fetch_batch_size'] ?? 2)?></b> nouveau(x) coureur(s) max par exécution. Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
+<p class="small">Cache actuel : <b><?=$cacheCount?></b> coureur(s), dont <b><?=$cacheFoundCount?></b> trouvé(s) et <b><?=$cacheNotFoundCount?></b> introuvable(s) FFA. Curseur événement : <b><?=h($cursorInfo)?></b>. FFA : <b><?=h($config['ffa_fetch_batch_size'] ?? 2)?></b> nouveau(x) coureur(s) max par exécution. Envoi RR par lots de <b><?=h($config['rr_save_batch_size'] ?? 2)?></b> participant(s). Cron conseillé : <code>php <?=h(__DIR__)?>/cron_sync.php</code></p>
 </div>
 
 <div class="card">

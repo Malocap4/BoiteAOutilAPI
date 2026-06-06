@@ -21,11 +21,12 @@ final class SyncService
     }
 
     /**
-     * Exécution volontairement incrémentale pour éviter les 502/timeouts HTTP :
-     * - on parcourt tous les participants RR ;
-     * - on pousse vers RR toutes les données déjà prêtes en cache ;
-     * - on limite les nouvelles requêtes FFA à ffa_fetch_batch_size coureurs par exécution ;
-     * - après chaque micro-lot FFA, on pousse immédiatement les nouvelles données vers RR.
+     * Exécution incrémentale à curseur :
+     * - on ne reparcourt plus les 3500+ participants à chaque exécution ;
+     * - on avance dans la liste RR à partir du dernier index traité ;
+     * - on limite les nouvelles requêtes FFA à ffa_fetch_batch_size par passage ;
+     * - un coureur FFA introuvable est aussi mis en cache pour ne pas le rechercher à chaque cron ;
+     * - dès qu'une donnée est prête, elle est envoyée vers RaceResult par micro-lots.
      */
     public function run(): array
     {
@@ -41,62 +42,111 @@ final class SyncService
         }
 
         $participants = $this->rr->participants($eventId);
+        $total = count($participants);
+        if ($total === 0) {
+            return [
+                'processed_this_run' => 0,
+                'total_rr' => 0,
+                'cursor_start' => 0,
+                'cursor_end' => 0,
+                'message' => 'Aucun participant RaceResult.',
+            ];
+        }
+
         $batchSize = max(1, (int)($this->config['rr_save_batch_size'] ?? 2));
         $ffaBatchSize = max(1, (int)($this->config['ffa_fetch_batch_size'] ?? 2));
         $maxRuntime = max(5, (int)($this->config['max_run_seconds'] ?? 25));
         $startedAt = microtime(true);
 
+        $cursorStart = $this->db->getCursor($eventId);
+        if ($cursorStart >= $total) {
+            $cursorStart = 0;
+        }
+        $cursor = $cursorStart;
+
         $processed = 0;
+        $inspected = 0;
         $cacheHits = 0;
+        $cacheFound = 0;
+        $cacheNotFound = 0;
         $ffaFetched = 0;
+        $runnerIdFound = 0;
+        $runnerIdNotFound = 0;
+        $licenceFound = 0;
+        $palmaresFound = 0;
+        $cacheInserted = 0;
         $ready = 0;
         $pushed = 0;
         $errors = 0;
         $skipped = 0;
         $deferred = 0;
+        $wrapped = false;
 
         $pendingRows = [];
         $pendingKeys = [];
         $pendingBibs = [];
 
-        foreach ($participants as $p) {
-            if ((microtime(true) - $startedAt) >= $maxRuntime) {
-                $deferred++;
-                continue;
+        while ($inspected < $total && (microtime(true) - $startedAt) < $maxRuntime) {
+            // Une fois le micro-lot FFA atteint, on laisse le prochain cron reprendre au curseur courant.
+            if ($ffaFetched >= $ffaBatchSize) {
+                $deferred = max(0, $total - $inspected);
+                break;
             }
+
+            $p = $participants[$cursor];
+            $currentIndex = $cursor;
+            $cursor = ($cursor + 1) % $total;
+            if ($cursor === 0 && $currentIndex !== 0) {
+                $wrapped = true;
+            }
+            $inspected++;
+            $processed++;
+            $this->db->setCursor($eventId, $cursor);
 
             $bib = (string)($p['Bib'] ?? '');
             if (!$bib || !trim((string)($p['Lastname'] ?? '')) || !trim((string)($p['Firstname'] ?? ''))) {
                 $skipped++;
                 continue;
             }
-            $processed++;
+
             $key = self::cacheKey($p);
 
             try {
                 $cache = $this->readCache($key);
 
-                if (!$cache) {
-                    if ($ffaFetched >= $ffaBatchSize) {
-                        // On ne surcharge pas athle.fr dans la même exécution : prochain cron/run.
-                        $deferred++;
+                if ($cache) {
+                    $cacheHits++;
+                    if (!empty($cache['runner_id'])) {
+                        $cacheFound++;
+                    } else {
+                        $cacheNotFound++;
+                        $skipped++;
                         continue;
                     }
-                    $cache = $this->fetchAndCache($p, $key);
-                    $ffaFetched++;
-                    // Après chaque récupération FFA, on pousse ce qui est prêt sans attendre la fin.
-                } else {
-                    $cacheHits++;
-                    // Si déjà poussé, inutile de renvoyer à chaque cron.
+
+                    // Déjà poussé : on avance simplement le curseur, sans refaire RR ni FFA.
                     if (!empty($cache['pushed_at'])) {
                         continue;
                     }
-                }
+                } else {
+                    $cache = $this->fetchAndCache($p, $key);
+                    $ffaFetched++;
+                    $cacheInserted++;
 
-                if (!$cache || empty($cache['runner_id'])) {
-                    $skipped++;
-                    $this->db->log($eventId, $bib, 'skip', 'Runner FFA introuvable');
-                    continue;
+                    if (!$cache || empty($cache['runner_id'])) {
+                        $runnerIdNotFound++;
+                        $skipped++;
+                        $this->db->log($eventId, $bib, 'skip', 'Runner FFA introuvable ou aucun résultat FFA');
+                        continue;
+                    }
+
+                    $runnerIdFound++;
+                    if (!empty($cache['licence'])) {
+                        $licenceFound++;
+                    }
+                    if (!empty($cache['palmares'])) {
+                        $palmaresFound++;
+                    }
                 }
 
                 $pendingRows[] = $this->makeSaveRow($bib, $cache, $mapRunnerId, $mapLicence, $mapPalmares);
@@ -104,7 +154,7 @@ final class SyncService
                 $pendingBibs[] = $bib;
                 $ready++;
 
-                if (count($pendingRows) >= $batchSize || $ffaFetched > 0) {
+                if (count($pendingRows) >= $batchSize) {
                     $this->flushRows($eventId, $pendingRows, $pendingKeys, $pendingBibs, $pushed, $errors);
                 }
             } catch (Throwable $e) {
@@ -117,10 +167,21 @@ final class SyncService
 
         return [
             'processed_this_run' => $processed,
-            'total_rr' => count($participants),
+            'inspected_this_run' => $inspected,
+            'total_rr' => $total,
+            'cursor_start' => $cursorStart,
+            'cursor_end' => $cursor,
+            'wrapped_to_beginning' => $wrapped,
             'cache_hits' => $cacheHits,
+            'cache_found' => $cacheFound,
+            'cache_not_found' => $cacheNotFound,
             'ffa_fetched_this_run' => $ffaFetched,
             'ffa_fetch_batch_size' => $ffaBatchSize,
+            'runnerid_found' => $runnerIdFound,
+            'runnerid_not_found' => $runnerIdNotFound,
+            'licence_found' => $licenceFound,
+            'palmares_found' => $palmaresFound,
+            'cache_inserted' => $cacheInserted,
             'ready_to_push' => $ready,
             'pushed' => $pushed,
             'skipped' => $skipped,

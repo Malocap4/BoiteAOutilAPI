@@ -1,92 +1,101 @@
-# FFA → RaceResult Sync PHP
+# FFA → RaceResult Sync
 
-Synchronisation PHP/SQLite pour :
-
-1. lire les inscrits RaceResult ;
-2. rechercher le RunnerID sur athle.fr à partir de nom/prénom/sexe/date de naissance ;
-3. lire licence + résultats ;
-4. formater le palmarès ;
-5. repousser RunnerID, RunnerLicence et palmarès dans les champs RR mappés.
+Application PHP + SQLite pour enrichir les participants RaceResult avec les informations trouvées sur athle.fr : RunnerID, licence et palmarès.
 
 ## Installation
 
-Pré-requis PHP :
+1. Copier le dossier `ffa-rr-sync` sur le serveur PHP.
+2. Vérifier que PHP a les extensions `curl`, `pdo_sqlite`, `mbstring` et `dom`.
+3. Donner les droits d'écriture au dossier `data/`.
+4. Modifier `config.php`, au minimum :
+   - `admin_password`
+   - éventuellement `ffa_fetch_batch_size`, `rr_save_batch_size`, `max_run_seconds`.
 
-- PHP 8.1+
-- extensions `curl`, `sqlite3`, `pdo_sqlite`, `dom`, `mbstring`, `iconv`
+## Utilisation UI
 
-Déposer le dossier sur le serveur ou PC local avec PHP.
+1. Ouvrir `index.php`.
+2. Sauvegarder l'API Key RaceResult.
+3. Charger la plage d'événements.
+4. Sélectionner l'événement.
+5. Mapper les champs RaceResult :
+   - `runnerId`
+   - `RunnerLicence`
+   - `palmarès`
+6. Lancer une synchro manuelle ou configurer le cron.
+
+## Cron conseillé
 
 ```bash
-cd ffa-rr-sync
-php -S 127.0.0.1:8080
+* * * * * /usr/bin/php /chemin/ffa-rr-sync/cron_sync.php >> /chemin/ffa-rr-sync/data/cron.log 2>&1
 ```
 
-Puis ouvrir :
+## Stratégie anti-timeout / anti-502
 
-```text
-http://127.0.0.1:8080/index.php
-```
+Cette version ne reparcourt plus toute la liste RaceResult à chaque exécution.
 
-## Configuration
+Elle utilise un curseur local SQLite :
 
-Modifier `config.php` :
+- exécution 1 : traite les prochains participants depuis le curseur ;
+- exécution 2 : reprend là où la précédente s'est arrêtée ;
+- quand la fin de liste est atteinte, le curseur revient au début.
 
-```php
-'admin_password' => 'change-me',
-'ffa_delay_us' => 500000,
-'ffa_fetch_batch_size' => 2,
-'rr_save_batch_size' => 2,
-'max_run_seconds' => 25,
-```
-
-## Cron
-
-Exemple toutes les 5 minutes :
-
-```cron
-*/5 * * * * /usr/bin/php /chemin/ffa-rr-sync/cron_sync.php >> /chemin/ffa-rr-sync/data/cron.log 2>&1
-```
-
-La synchronisation est maintenant incrémentale pour éviter les erreurs 502/timeouts : tous les participants RR sont parcourus, mais seules 2 nouvelles fiches FFA sont interrogées par exécution par défaut. Les infos déjà présentes en cache sont poussées vers RaceResult sans attendre.
-
-Les envois vers RaceResult sont groupés par lots configurables, par défaut deux participants par deux participants :
+Les appels FFA sont limités par :
 
 ```php
 'ffa_fetch_batch_size' => 2,
+```
+
+Donc seulement 2 nouveaux coureurs non présents en cache sont requêtés sur athle.fr par exécution.
+
+Les coureurs introuvables côté FFA sont aussi stockés en cache avec un RunnerID vide. Cela évite de refaire la même recherche à chaque cron.
+
+## Push RaceResult
+
+Dès qu'une donnée est prête, elle est poussée vers RaceResult via `part/savefields`, par lots configurables :
+
+```php
 'rr_save_batch_size' => 2,
-'max_run_seconds' => 25,
 ```
 
-## Point important FFA
+Un participant déjà poussé n'est pas renvoyé à chaque cron, sauf après RAZ cache.
 
-Le parsing FFA ne s'appuie pas sur des positions fixes de colonnes.
-Il détecte les champs par appellations et alias :
+## RAZ cache
 
-- date, jour
-- épreuve, compétition, event, meeting
-- distance
-- type, discipline, nature
-- place, classement, clt, rang
-- temps, chrono, performance, perf
-- catégorie, cat
-- sexe
+Le bouton **RAZ cache FFA** vide :
 
-Cela permet de supporter des décalages de colonnes ou des présentations différentes.
+- le cache des coureurs ;
+- le curseur de synchro.
 
-## Cache
+La synchro repart donc de zéro.
 
-SQLite stocke les coureurs déjà requêtés dans `data/sync.sqlite`.
-La clé cache est :
+## Lecture du JSON de résultat
 
-```text
-NOM|PRENOM|SEXE|DATE_NAISSANCE
+Exemple :
+
+```json
+{
+  "processed_this_run": 2,
+  "total_rr": 3559,
+  "cursor_start": 0,
+  "cursor_end": 2,
+  "cache_hits": 0,
+  "ffa_fetched_this_run": 2,
+  "runnerid_found": 1,
+  "runnerid_not_found": 1,
+  "cache_inserted": 2,
+  "pushed": 1
+}
 ```
 
-Le bouton **RAZ cache FFA** vide ce cache et force une nouvelle interrogation athle.fr.
+Signification :
 
-## Limites connues
+- `cursor_start` / `cursor_end` : progression dans la liste RR ;
+- `ffa_fetched_this_run` : nombre de nouvelles recherches athle.fr tentées ;
+- `runnerid_found` : nombre de RunnerID trouvés ;
+- `runnerid_not_found` : nombre de participants sans correspondance FFA ;
+- `cache_not_found` : coureurs déjà connus comme introuvables FFA ;
+- `pushed` : participants envoyés à RaceResult.
 
-- athle.fr est parsé en HTML : si la structure change fortement, il faudra ajuster les alias ou le parser.
-- Le login RaceResult peut varier selon le type d'API key. Le code tente de récupérer le token depuis JSON ou texte brut.
-- Il est conseillé de garder une cadence raisonnable côté FFA.
+## Point d'attention FFA
+
+Le parsing FFA est volontairement fait par recherche de libellés / appellations et non par position fixe, car les colonnes et blocs HTML peuvent varier selon les pages athle.fr.
